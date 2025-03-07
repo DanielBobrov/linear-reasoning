@@ -8,6 +8,7 @@ from tqdm import tqdm
 def prepare_optimized_data():
     """Tokenize and optimize data, reducing target to just the attribute token to predict"""
     data_dir = Path("/kaggle/input/paper-data/data/comparison.1000.12.6")
+    out_dir = Path("/kaggle/working")
     
     # Check if files exist
     vocab_path = data_dir / "vocab.json"
@@ -29,14 +30,12 @@ def prepare_optimized_data():
     
     # Load tokenizer
     tokenizer = SimpleTokenizer(vocab_path)
-
-    data_dir = Path("/kaggle/working")
     
     # Create output directories
     train_out_dir = data_dir / "train"
     valid_out_dir = data_dir / "valid"
     test_out_dir = data_dir / "test"
-    optimized_dir = data_dir / "optimized"
+    optimized_dir = output_dir / "optimized"
     
     for directory in [train_out_dir, valid_out_dir, test_out_dir, optimized_dir]:
         os.makedirs(directory, exist_ok=True)
@@ -111,7 +110,7 @@ def prepare_optimized_data():
         # Удаляем ссылки на end_token_id, так как этого атрибута больше нет в SimpleTokenizer
     }
     
-    with open(data_dir / "optimized" / "metadata.json", "w") as f:
+    with open(output_dir / "optimized" / "metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)
     
     print("\nOptimized data preparation complete.")
