@@ -21,7 +21,7 @@ class SimpleTokenizer:
         
         # Minimal setup - только необходимые атрибуты
         self.vocab_size = len(self.vocab)
-        self.pad_id = -1  # Default padding ID
+        self.pad_id = 0  # Используем 0 вместо -1
         
         # Мы сохраняем только mask_token_id, так как он используется в данных
         self.mask_token_id = self.token_to_id.get("<mask>") if "<mask>" in self.token_to_id else None

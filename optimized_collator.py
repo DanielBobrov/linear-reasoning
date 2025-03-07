@@ -24,11 +24,22 @@ def optimized_collate_fn(
     if not batch:
         return torch.tensor([]), torch.tensor([]), []
     
-    pad_id = tokenizer.pad_id if tokenizer is not None else -1
+    # Обеспечиваем, чтобы pad_id был корректным
+    pad_id = tokenizer.pad_id if tokenizer is not None and hasattr(tokenizer, 'pad_id') else 0
+    if pad_id < 0:
+        print("WARNING: Negative padding ID detected. Setting to 0.")
+        pad_id = 0
     
-    # Обязательно проверяем vocab_size
-    vocab_size = tokenizer.vocab_size
-    print(f"Collator using vocab_size={vocab_size}, checking {len(batch)} samples")
+    # Находим максимальное значение токена в батче для диагностики
+    max_token_value = -1
+    for item in batch:
+        if 'input_ids' in item:
+            max_token_value = max(max_token_value, max(item['input_ids']) if item['input_ids'] else -1)
+        if 'target_id' in item:
+            max_token_value = max(max_token_value, item['target_id'])
+    
+    vocab_size = getattr(tokenizer, 'vocab_size', 1106)
+    print(f"Collator: max_token={max_token_value}, vocab_size={vocab_size}")
     
     # Получаем максимальную длину последовательностей в этом батче
     max_length = max(len(item["input_ids"]) for item in batch)

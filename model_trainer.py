@@ -20,8 +20,17 @@ class SingleTokenClassifier(nn.Module):
         super().__init__()
         self.config = config
         
+        # Обеспечим, чтобы vocab_size было корректным, добавив запас на всякий случай
+        self.vocab_size = config.vocab_size
+        print(f"Initializing embedding with vocab_size={self.vocab_size}")
+        
+        # Проверяем, не слишком ли мал размер словаря
+        if self.vocab_size < 1500:  # Просто для безопасности
+            print(f"WARNING: Vocab size {self.vocab_size} seems small. Adding padding to be safe.")
+            self.vocab_size = max(self.vocab_size + 10, 1200)  # Добавляем запас
+            
         # Простая конфигурация трансформера
-        self.embedding = nn.Embedding(config.vocab_size, config.hidden_size)
+        self.embedding = nn.Embedding(self.vocab_size, config.hidden_size, padding_idx=0)  # Используем 0 как padding_idx
         
         # Слои энкодера (упрощенные блоки трансформера)
         encoder_layer = nn.TransformerEncoderLayer(
@@ -192,10 +201,29 @@ def train_model(
     print(f"Loading tokenizer from: {vocab_path}")
     tokenizer = SimpleTokenizer(vocab_path)
     
+    # Устанавливаем pad_id в корректное значение
+    tokenizer.pad_id = 0  # Используем 0 вместо -1
+    
+    # Сканируем данные для проверки максимального индекса токена перед созданием модели
+    try:
+        with open(train_data_path, 'r') as f:
+            train_samples = json.load(f)
+            max_token_id = -1
+            for item in train_samples[:1000]:  # Берем первые 1000 для скорости
+                max_token_id = max(max_token_id, max(item['input_ids'] + [item['target_id']]))
+            print(f"Maximum token ID in data: {max_token_id}, vocab_size={tokenizer.vocab_size}")
+            
+            # Настраиваем vocab_size, если нужно
+            if max_token_id >= tokenizer.vocab_size:
+                print(f"WARNING: Maximum token ID {max_token_id} exceeds vocab_size {tokenizer.vocab_size}")
+                tokenizer.vocab_size = max_token_id + 10  # Добавляем запас
+    except Exception as e:
+        print(f"Error scanning data: {e}")
+    
     # Создаем конфигурацию модели с vocab_size из загруженного токенизатора
     from kaggle_run import SmallRecRNNConfig
     model_config = SmallRecRNNConfig(
-        vocab_size=tokenizer.vocab_size,
+        vocab_size=tokenizer.vocab_size,  # Используем обновленный размер словаря
         hidden_size=768,  # Может быть настроен на основе требований
         intermediate_size=2048,
         num_hidden_layers=4,
@@ -207,7 +235,7 @@ def train_model(
         mean_recurrence=6,
     )
     
-    print(f"Model configuration: vocab_size={model_config.vocab_size}, hidden_size={model_config.hidden_size}")
+    print(f"Final model configuration: vocab_size={model_config.vocab_size}, hidden_size={model_config.hidden_size}")
     
     # Создаем модель
     print("Creating model...")
@@ -225,7 +253,7 @@ def train_model(
     print(f"Validation data: {len(val_dataset)} samples")
     
     # Создаем загрузчики данных с обычной функцией collate без лишних проверок
-    # Убираем "безопасный" collator, так как токенизатор должен выбрасывать исключения при проблемах
+    # Убираем "безопасный" collатор, так как токенизатор должен выбрасывать исключения при проблемах
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size, 
