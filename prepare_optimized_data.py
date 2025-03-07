@@ -7,9 +7,35 @@ from tqdm import tqdm
 
 def prepare_optimized_data():
     """Tokenize and optimize data, reducing target to just the attribute token to predict"""
-    # Пути в Kaggle - входные данные только для чтения
-    data_dir = Path("/kaggle/input/paper-data/data/comparison.1000.12.6")
-    working_dir = Path("/kaggle/working")  # Директория для записи
+    # Пути в Kaggle - проверяем различные возможные пути к данным
+    possible_data_dirs = [
+        Path("/kaggle/input/paper-data/data/comparison.1000.12.6"),
+        Path("/kaggle/working/data")
+    ]
+    
+    # Находим первый существующий каталог с данными
+    data_dir = None
+    for dir_path in possible_data_dirs:
+        if dir_path.exists() and (dir_path / "vocab.json").exists():
+            data_dir = dir_path
+            break
+    
+    if data_dir is None:
+        print("ERROR: Could not find data directory with vocab.json")
+        # Ищем vocab.json в любом месте
+        vocab_paths = list(Path("/kaggle").glob("**/vocab.json"))
+        if vocab_paths:
+            data_dir = vocab_paths[0].parent
+            print(f"Found potential data directory: {data_dir}")
+        else:
+            print("No data directory found. Cannot proceed.")
+            return
+    
+    # Директория для записи результатов
+    working_dir = Path("/kaggle/working")
+    
+    print(f"Using data directory: {data_dir}")
+    print(f"Using output directory: {working_dir}")
     
     # Check if files exist
     vocab_path = data_dir / "vocab.json"
@@ -17,14 +43,18 @@ def prepare_optimized_data():
     valid_path = data_dir / "valid.json"
     test_path = data_dir / "test.json"
     
+    if not vocab_path.exists():
+        print(f"ERROR: vocab.json not found at {vocab_path}")
+        return
+    
     # Verify which files exist
     available_files = []
     for path in [train_path, valid_path, test_path]:
         if path.exists():
             available_files.append(path.name)
     
-    if not vocab_path.exists() or not available_files:
-        print("Required files are missing. Need at least vocab.json and one of train.json, valid.json, test.json")
+    if not available_files:
+        print("ERROR: No json data files found. Need at least one of train.json, valid.json, test.json")
         return
     
     print(f"Found files: vocab.json and {available_files}")
@@ -74,16 +104,7 @@ def prepare_optimized_data():
         with open(output_file, 'w') as f:
             json.dump(optimized_data, f)
             
-        # Calculate statistics
-        input_lengths = [len(item['input_ids']) for item in optimized_data]
-        attribute_values = [item['target_id'] for item in optimized_data]
-        unique_targets = len(set(attribute_values))
-        
-        print(f"Statistics for {file_name}:")
-        print(f"  Total samples: {len(optimized_data)}")
-        print(f"  Input lengths: min={min(input_lengths)}, max={max(input_lengths)}, avg={np.mean(input_lengths):.2f}")
-        print(f"  Unique target attributes: {unique_targets}")
-        print(f"  Optimized data saved to {output_file}")
+        print(f"Saved optimized data to {output_file} ({len(optimized_data)} samples)")
     
     # Create a metadata file that the dataloader can use
     metadata = {
@@ -97,6 +118,7 @@ def prepare_optimized_data():
         json.dump(metadata, f, indent=2)
     
     print("\nOptimized data preparation complete.")
+    print(f"Files in optimized directory: {list(optimized_dir.glob('*'))}")
 
 if __name__ == "__main__":
     prepare_optimized_data()

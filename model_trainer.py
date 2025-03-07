@@ -139,15 +139,55 @@ def train_model(
     if val_data_path is None:
         val_data_path = "/kaggle/working/optimized/valid_optimized.json"
     
+    # Проверяем существование файлов
+    if not Path(train_data_path).exists():
+        print(f"ОШИБКА: Файл {train_data_path} не найден!")
+        # Ищем альтернативные пути
+        alt_paths = list(Path("/kaggle/working").glob("**/*train*optimized*.json"))
+        if alt_paths:
+            print(f"Найдены альтернативные файлы: {alt_paths}")
+            train_data_path = str(alt_paths[0])
+        else:
+            print("Альтернативные файлы не найдены. Убедитесь, что prepare_optimized_data.py был выполнен.")
+            return
+    
+    if not Path(val_data_path).exists():
+        print(f"ОШИБКА: Файл {val_data_path} не найден!")
+        # Ищем альтернативные пути
+        alt_paths = list(Path("/kaggle/working").glob("**/*valid*optimized*.json"))
+        if alt_paths:
+            print(f"Найдены альтернативные файлы: {alt_paths}")
+            val_data_path = str(alt_paths[0])
+        else:
+            print("Альтернативные файлы не найдены. Убедитесь, что prepare_optimized_data.py был выполнен.")
+            return
+    
     # Создаем выходную директорию
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Загружаем токенизатор
-    vocab_path = "/kaggle/input/paper-data/data/comparison.1000.12.6/vocab.json"
-    if not Path(vocab_path).exists():
-        # Резервный путь
-        vocab_path = Path("/kaggle/working/data/vocab.json")
+    vocab_paths = [
+        "/kaggle/input/paper-data/data/comparison.1000.12.6/vocab.json",
+        "/kaggle/working/data/vocab.json"
+    ]
+    
+    vocab_path = None
+    for path in vocab_paths:
+        if Path(path).exists():
+            vocab_path = path
+            break
+    
+    if vocab_path is None:
+        print("ОШИБКА: vocab.json не найден!")
+        # Ищем альтернативные пути
+        alt_paths = list(Path("/kaggle").glob("**/vocab.json"))
+        if alt_paths:
+            print(f"Найдены альтернативные файлы: {alt_paths}")
+            vocab_path = str(alt_paths[0])
+        else:
+            print("vocab.json не найден. Обучение невозможно.")
+            return
     
     print(f"Loading tokenizer from: {vocab_path}")
     tokenizer = SimpleTokenizer(vocab_path)

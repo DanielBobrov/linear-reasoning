@@ -55,11 +55,14 @@ def run_small_model():
     parser.add_argument("--hidden-size", type=int, default=768, help="Hidden size of the model")
     parser.add_argument("--batch-size", type=int, default=32, help="Micro batch size")
     parser.add_argument("--optimize-data", action="store_true", help="Use optimized data format with single token targets")
+    parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
+    parser.add_argument("--learning-rate", type=float, default=1e-4, help="Learning rate")
     args = parser.parse_args()
 
     # Определяем пути к данным и выходным файлам с учетом структуры Kaggle
     data_dir = Path("/kaggle/input/paper-data/data/comparison.1000.12.6")
-    output_dir = Path("/kaggle/working/output")
+    working_dir = Path("/kaggle/working")
+    output_dir = working_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     
     if args.analyze_only:
@@ -70,16 +73,12 @@ def run_small_model():
 
     # Prepare data
     print("Preparing data...")
-    if args.optimize_data:
-        # Use optimized data format (single token target)
-        if not (Path("/kaggle/working/optimized")).exists():
-            import subprocess
-            subprocess.run(["python", "prepare_optimized_data.py"])
-        else:
-            print("Optimized data already exists. Skipping preparation.")
-        data_prefix = "optimized"
+    # Всегда используем оптимизированный формат для Kaggle, так как это единственный рабочий вариант
+    if not (working_dir / "optimized").exists():
+        import subprocess
+        subprocess.run(["python", "prepare_optimized_data.py"])
     else:
-        data_prefix = "data"
+        print("Optimized data already exists. Skipping preparation.")
     
     if args.prepare_only:
         print("Data preparation complete. Exiting as requested.")
@@ -109,24 +108,21 @@ def run_small_model():
     print(f"  Intermediate Size: {model_config.intermediate_size}")
     print(f"  Attention Heads: {model_config.num_attention_heads}")
     print(f"  Batch Size: {args.batch_size}")
-    print(f"  Data Format: {'Optimized (single token target)' if args.optimize_data else 'Standard'}")
+    print(f"  Epochs: {args.epochs}")
+    print(f"  Learning Rate: {args.learning_rate}")
     
-    if args.optimize_data:
-        print("\nTraining with optimized collator...")
-        # Run optimized trainer directly
-        from model_trainer import train_model
-        train_model(
-            train_data_path=str(Path("/kaggle/working/optimized/train_optimized.json")),
-            val_data_path=str(Path("/kaggle/working/optimized/valid_optimized.json")),
-            output_dir=str(output_dir),
-            epochs=10,
-            batch_size=args.batch_size,
-            learning_rate=1e-4,
-            seed=42
-        )
-    else:
-        print("\nThis mode is not fully implemented in Kaggle environment.")
-        print("Please use --optimize-data flag for training in Kaggle.")
+    # В Kaggle мы используем только оптимизированный тренер, так как стандартный требует train.py
+    print("\nTraining with optimized model_trainer...")
+    from model_trainer import train_model
+    train_model(
+        train_data_path=str(working_dir / "optimized" / "train_optimized.json"),
+        val_data_path=str(working_dir / "optimized" / "valid_optimized.json"),
+        output_dir=str(output_dir),
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        seed=42
+    )
     
     print("\nTraining completed. Files saved to:", output_dir)
 
