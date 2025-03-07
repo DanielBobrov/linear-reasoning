@@ -15,14 +15,15 @@ class SimpleTokenizer:
         self.token_to_id = {token: i for i, token in enumerate(self.vocab)}
         self.id_to_token = {i: token for i, token in enumerate(self.vocab)}
         
-        # Minimal setup - only essential properties
+        # Minimal setup - только необходимые атрибуты
         self.vocab_size = len(self.vocab)
         self.pad_id = -1  # Default padding ID
         
-        # We only keep mask_token_id since it appears in our data format
+        # Мы сохраняем только mask_token_id, так как он используется в данных
         self.mask_token_id = self.token_to_id.get("<mask>") if "<mask>" in self.token_to_id else None
         
-        # No need for special end token handling as we're using single token prediction
+        # Атрибут end_token_id и другие специальные токены удалены, так как используется 
+        # одиночный целевой токен в оптимизированном формате
         
     def encode(self, text: str) -> List[int]:
         """Encode text into token ids"""

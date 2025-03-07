@@ -105,11 +105,10 @@ def prepare_optimized_data():
     # Create a metadata file that the dataloader can use
     metadata = {
         "vocab_size": tokenizer.vocab_size,
-        "has_end_token": tokenizer.end_token_id is not None,
-        "end_token_id": tokenizer.end_token_id,
         "mask_token_id": tokenizer.mask_token_id,
         "optimized_format": True,
         "single_token_target": True
+        # Удаляем ссылки на end_token_id, так как этого атрибута больше нет в SimpleTokenizer
     }
     
     with open(data_dir / "optimized" / "metadata.json", "w") as f:
