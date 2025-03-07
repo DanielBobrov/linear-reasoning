@@ -7,8 +7,9 @@ from tqdm import tqdm
 
 def prepare_optimized_data():
     """Tokenize and optimize data, reducing target to just the attribute token to predict"""
+    # Пути в Kaggle - входные данные только для чтения
     data_dir = Path("/kaggle/input/paper-data/data/comparison.1000.12.6")
-    output_dir = Path("/kaggle/working")
+    working_dir = Path("/kaggle/working")  # Директория для записи
     
     # Check if files exist
     vocab_path = data_dir / "vocab.json"
@@ -31,23 +32,12 @@ def prepare_optimized_data():
     # Load tokenizer
     tokenizer = SimpleTokenizer(vocab_path)
     
-    # Create output directories
-    train_out_dir = data_dir / "train"
-    valid_out_dir = data_dir / "valid"
-    test_out_dir = data_dir / "test"
-    optimized_dir = output_dir / "optimized"
-    
-    for directory in [train_out_dir, valid_out_dir, test_out_dir, optimized_dir]:
-        os.makedirs(directory, exist_ok=True)
+    # Create output directories only in writable location
+    optimized_dir = working_dir / "optimized"
+    optimized_dir.mkdir(parents=True, exist_ok=True)
     
     # Process each available file
-    file_mapping = [
-        ("train.json", train_out_dir),
-        ("valid.json", valid_out_dir),
-        ("test.json", test_out_dir)
-    ]
-    
-    for file_name, output_dir in file_mapping:
+    for file_name in ["train.json", "valid.json", "test.json"]:
         file_path = data_dir / file_name
         if not file_path.exists():
             print(f"Skipping {file_name} as it doesn't exist.")
@@ -79,14 +69,9 @@ def prepare_optimized_data():
             }
             optimized_data.append(optimized_item)
         
-        # Save optimized data
+        # Save optimized data ТОЛЬКО в /kaggle/working
         output_file = optimized_dir / f"{file_name.replace('.json', '_optimized.json')}"
         with open(output_file, 'w') as f:
-            json.dump(optimized_data, f)
-        
-        # Also save a version in the expected directory structure
-        simplified_output = output_dir / f"{file_name.split('.')[0]}_optimized.json"
-        with open(simplified_output, 'w') as f:
             json.dump(optimized_data, f)
             
         # Calculate statistics
@@ -99,7 +84,6 @@ def prepare_optimized_data():
         print(f"  Input lengths: min={min(input_lengths)}, max={max(input_lengths)}, avg={np.mean(input_lengths):.2f}")
         print(f"  Unique target attributes: {unique_targets}")
         print(f"  Optimized data saved to {output_file}")
-        print(f"  Data also saved to {simplified_output}")
     
     # Create a metadata file that the dataloader can use
     metadata = {
@@ -107,10 +91,9 @@ def prepare_optimized_data():
         "mask_token_id": tokenizer.mask_token_id,
         "optimized_format": True,
         "single_token_target": True
-        # Удаляем ссылки на end_token_id, так как этого атрибута больше нет в SimpleTokenizer
     }
     
-    with open(output_dir / "optimized" / "metadata.json", "w") as f:
+    with open(optimized_dir / "metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)
     
     print("\nOptimized data preparation complete.")
