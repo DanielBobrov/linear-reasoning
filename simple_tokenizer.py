@@ -22,8 +22,6 @@ class SimpleTokenizer:
         # Мы сохраняем только mask_token_id, так как он используется в данных
         self.mask_token_id = self.token_to_id.get("<mask>") if "<mask>" in self.token_to_id else None
         
-        # Атрибут end_token_id и другие специальные токены удалены, так как используется 
-        # одиночный целевой токен в оптимизированном формате
         
     def encode(self, text: str) -> List[int]:
         """Encode text into token ids"""

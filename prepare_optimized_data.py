@@ -8,7 +8,7 @@ from tqdm import tqdm
 def prepare_optimized_data():
     """Tokenize and optimize data, reducing target to just the attribute token to predict"""
     data_dir = Path("/kaggle/input/paper-data/data/comparison.1000.12.6")
-    out_dir = Path("/kaggle/working")
+    output_dir = Path("/kaggle/working")
     
     # Check if files exist
     vocab_path = data_dir / "vocab.json"
