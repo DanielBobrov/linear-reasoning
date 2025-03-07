@@ -1,5 +1,6 @@
 import json
 import os
+import argparse
 from pathlib import Path
 import numpy as np
 from simple_tokenizer import SimpleTokenizer
@@ -7,6 +8,11 @@ from tqdm import tqdm
 
 def prepare_optimized_data():
     """Tokenize and optimize data, reducing target to just the attribute token to predict"""
+    # Добавляем аргумент --force для принудительной пересоздания данных
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--force', action='store_true', help='Force recreation of optimized data')
+    args = parser.parse_args()
+
     # Пути в Kaggle - проверяем различные возможные пути к данным
     possible_data_dirs = [
         Path("/kaggle/input/paper-data/data/comparison.1000.12.6"),
@@ -64,6 +70,18 @@ def prepare_optimized_data():
     
     # Create output directories only in writable location
     optimized_dir = working_dir / "optimized"
+    
+    # Проверяем, существуют ли оптимизированные данные и нужно ли их пересоздать
+    if optimized_dir.exists() and not args.force:
+        print(f"Optimized data directory already exists at {optimized_dir}. Use --force to recreate.")
+        return
+    
+    # Создаем директорию заново
+    if optimized_dir.exists():
+        print("Removing existing optimized data directory...")
+        import shutil
+        shutil.rmtree(optimized_dir)
+    
     optimized_dir.mkdir(parents=True, exist_ok=True)
     
     # Определим максимальный индекс токена в словаре
@@ -185,7 +203,26 @@ def prepare_optimized_data():
         with open(output_file, 'w') as f:
             json.dump(optimized_data, f)
         
-        print(f"Saved to: {output_file}")
+        print(f"Saved to: {output_file} - {len(optimized_data)} samples")
+        
+        # Проверяем созданные данные, чтобы убедиться, что все токены в пределах словаря
+        with open(output_file, 'r') as f:
+            verification_data = json.load(f)
+            
+        print("Verifying output data...")
+        out_of_range_tokens = 0
+        for item in verification_data[:100]:  # Проверяем первые 100 элементов
+            for token_id in item['input_ids']:
+                if token_id >= tokenizer.vocab_size or token_id < 0:
+                    out_of_range_tokens += 1
+                    
+            if item['target_id'] >= tokenizer.vocab_size or item['target_id'] < 0:
+                out_of_range_tokens += 1
+                
+        if out_of_range_tokens > 0:
+            print(f"WARNING: Found {out_of_range_tokens} token IDs out of range in verification!")
+        else:
+            print("Verification passed: all tokens are within vocabulary range")
     
     # Create a metadata file that the dataloader can use
     metadata = {

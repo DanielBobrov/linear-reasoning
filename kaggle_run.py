@@ -107,12 +107,11 @@ def run_small_model():
 
     # Prepare data
     print("Preparing data...")
-    # Всегда используем оптимизированный формат для Kaggle, так как это единственный рабочий вариант
-    if not (working_dir / "optimized").exists():
-        import subprocess
-        subprocess.run(["python", "prepare_optimized_data.py"])
-    else:
-        print("Optimized data already exists. Skipping preparation.")
+    # Необходимо принудительно пересоздать оптимизированные данные, поскольку возможно 
+    # они были созданы с другой версией словаря
+    import subprocess
+    print("Forcing recreation of optimized data to ensure consistency with current vocabulary")
+    subprocess.run(["python", "prepare_optimized_data.py", "--force"])
     
     if args.prepare_only:
         print("Data preparation complete. Exiting as requested.")
