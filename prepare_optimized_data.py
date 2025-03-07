@@ -68,6 +68,13 @@ def prepare_optimized_data():
     
     # Определим максимальный индекс токена в словаре
     max_token_id = tokenizer.vocab_size - 1
+    print(f"Vocab size: {tokenizer.vocab_size}, Max token ID: {max_token_id}")
+    
+    # Распечатаем несколько токенов для диагностики
+    print("Sample tokens from vocabulary:")
+    for i in range(0, max_token_id, max(1, max_token_id // 10)):
+        print(f"  ID {i}: {tokenizer.id_to_token.get(i, 'UNKNOWN')}")
+    print(f"  ID {max_token_id}: {tokenizer.id_to_token.get(max_token_id, 'UNKNOWN')}")
     
     # Process each available file
     for file_name in ["train.json", "valid.json", "test.json"]:
@@ -84,27 +91,73 @@ def prepare_optimized_data():
         # Tokenize and optimize data
         optimized_data = []
         invalid_items = 0
+        max_seen_token_id = -1
+        
         for item in tqdm(data, desc=f"Optimizing {file_name}"):
             try:
-                input_tokens = tokenizer.encode(item['input_text'])
-                target_tokens = tokenizer.encode(item['target_text'])
+                input_text = item['input_text']
+                target_text = item['target_text']
+                
+                # Диагностическая информация для первых нескольких элементов
+                if len(optimized_data) < 2:
+                    print(f"\nSample {len(optimized_data)+1}:")
+                    print(f"  Input: {input_text}")
+                    print(f"  Target: {target_text}")
+                
+                # Явная проверка формата входного текста
+                if not (input_text.startswith('<') and input_text.endswith('>')):
+                    print(f"Warning: Input text does not follow expected format: {input_text}")
+                    invalid_items += 1
+                    continue
+                
+                # Токенизация с тщательным отслеживанием ошибок
+                try:
+                    input_tokens = tokenizer.encode(input_text)
+                    if len(optimized_data) < 2:
+                        print(f"  Input tokens: {input_tokens}")
+                except Exception as e:
+                    print(f"Error encoding input '{input_text}': {str(e)}")
+                    invalid_items += 1
+                    continue
+                    
+                try:
+                    target_tokens = tokenizer.encode(target_text)
+                    if len(optimized_data) < 2:
+                        print(f"  Target tokens: {target_tokens}")
+                except Exception as e:
+                    print(f"Error encoding target '{target_text}': {str(e)}")
+                    invalid_items += 1
+                    continue
+                
+                # Отслеживание наибольшего ID токена для диагностики
+                max_input_id = max(input_tokens) if input_tokens else -1
+                max_target_id = max(target_tokens) if target_tokens else -1
+                max_seen_token_id = max(max_seen_token_id, max_input_id, max_target_id)
                 
                 # Проверка на валидность индексов токенов
-                if any(tid > max_token_id or tid < 0 for tid in input_tokens) or \
-                   any(tid > max_token_id or tid < 0 for tid in target_tokens):
-                    print(f"Warning: Item contains out-of-range token IDs. Skipping: {item}")
+                invalid_input_ids = [tid for tid in input_tokens if tid < 0 or tid >= tokenizer.vocab_size]
+                invalid_target_ids = [tid for tid in target_tokens if tid < 0 or tid >= tokenizer.vocab_size]
+                
+                if invalid_input_ids or invalid_target_ids:
+                    print(f"Warning: Out-of-range token IDs in item {item}:")
+                    if invalid_input_ids:
+                        print(f"  Invalid input IDs: {invalid_input_ids}")
+                    if invalid_target_ids:
+                        print(f"  Invalid target IDs: {invalid_target_ids}")
                     invalid_items += 1
                     continue
                 
                 # Extract just the attribute token (second-to-last token)
-                # Target is now just a single token - the attribute to predict
                 if len(target_tokens) < 2:
-                    raise ValueError(f"Target sequence too short: {item['target_text']}")
+                    print(f"Warning: Target sequence too short: {target_text}")
+                    invalid_items += 1
+                    continue
                 
                 attribute_token = target_tokens[-2]
                 
-                if attribute_token > max_token_id or attribute_token < 0:
-                    print(f"Warning: attribute token ID {attribute_token} is out of range. Skipping: {item}")
+                # Дополнительная проверка атрибут-токена
+                if attribute_token < 0 or attribute_token >= tokenizer.vocab_size:
+                    print(f"Warning: Attribute token ID {attribute_token} is out of vocab range [0-{tokenizer.vocab_size-1}]")
                     invalid_items += 1
                     continue
                 
@@ -114,18 +167,25 @@ def prepare_optimized_data():
                     'type': item.get('type', 'unknown'),
                 }
                 optimized_data.append(optimized_item)
+                
             except Exception as e:
-                # При любой ошибке обработки - выводим понятное сообщение и прерываем выполнение
                 print(f"Error processing item: {e}")
                 print(f"Problematic item: {item}")
-                raise  # Повторно вызываем исключение, чтобы процесс завершился с ошибкой
+                invalid_items += 1
+                continue  # Продолжаем обработку других элементов вместо завершения
+        
+        print(f"\nStats for {file_name}:")
+        print(f"  Processed: {len(data)} items")
+        print(f"  Valid: {len(optimized_data)} items")
+        print(f"  Invalid: {invalid_items} items")
+        print(f"  Largest token ID seen: {max_seen_token_id} (vocab size: {tokenizer.vocab_size})")
         
         # Save optimized data ТОЛЬКО в /kaggle/working
         output_file = optimized_dir / f"{file_name.replace('.json', '_optimized.json')}"
         with open(output_file, 'w') as f:
             json.dump(optimized_data, f)
-            
-        print(f"Saved optimized data to {output_file} ({len(optimized_data)} samples, {invalid_items} invalid items skipped)")
+        
+        print(f"Saved to: {output_file}")
     
     # Create a metadata file that the dataloader can use
     metadata = {

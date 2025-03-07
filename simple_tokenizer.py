@@ -11,6 +11,10 @@ class SimpleTokenizer:
         with open(vocab_path, 'r') as f:
             self.vocab = json.load(f)
         
+        print(f"Loaded vocabulary with {len(self.vocab)} tokens from {vocab_path}")
+        print(f"First 5 tokens: {self.vocab[:5]}")
+        print(f"Last 5 tokens: {self.vocab[-5:]}")
+        
         # Create token to id mapping
         self.token_to_id = {token: i for i, token in enumerate(self.vocab)}
         self.id_to_token = {i: token for i, token in enumerate(self.vocab)}
@@ -27,13 +31,11 @@ class SimpleTokenizer:
         # For our case, the text already contains tokens like <e_X>
         tokens = ["<"+i+">" for i in text[1:-1].split("><")]
         ids = []
-        
         for token in tokens:
             if token in self.token_to_id:
                 ids.append(self.token_to_id[token])
             else:
-                # Если токен не найден - это критическая ошибка
-                raise ValueError(f"Token not found in vocabulary: '{token}'. This indicates a bug in tokenization logic!")
+                raise ValueError(f"Token '{token}' not found in vocabulary (text: {text})")
         
         return ids
     
@@ -44,10 +46,9 @@ class SimpleTokenizer:
             if id in self.id_to_token:
                 tokens.append(self.id_to_token[id])
             else:
-                # Если ID токена за пределами словаря - это критическая ошибка
-                raise ValueError(f"Token ID {id} is out of vocabulary range (0-{self.vocab_size-1}). This indicates a bug in the model or data processing!")
+                raise ValueError(f"Token ID {id} not found in vocabulary (range: 0-{self.vocab_size-1})")
         
-        return " ".join(tokens)
+        return "".join(tokens)  # Объединяем без пробелов для формата <token1><token2>
     
     def batch_encode(self, texts: List[str]):
         """Encode a batch of texts"""
