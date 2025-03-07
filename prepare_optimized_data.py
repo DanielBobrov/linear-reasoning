@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 def prepare_optimized_data():
     """Tokenize and optimize data, reducing target to just the attribute token to predict"""
-    data_dir = Path(__file__).parent.absolute() / "data"
+    data_dir = Path("/kaggle/input/paper-data/data/comparison.1000.12.6")
     
     # Check if files exist
     vocab_path = data_dir / "vocab.json"
@@ -29,6 +29,8 @@ def prepare_optimized_data():
     
     # Load tokenizer
     tokenizer = SimpleTokenizer(vocab_path)
+
+    data_dir = Path("/kaggle/working")
     
     # Create output directories
     train_out_dir = data_dir / "train"

@@ -25,8 +25,8 @@ def run_small_model():
     args = parser.parse_args()
 
     # Directory paths
-    data_dir = current_dir / "data"
-    output_dir = current_dir / "output"
+    data_dir = Path("/kaggle/input/paper-data/data/comparison.1000.12.6")
+    output_dir = Path("kaggle/working/") / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     
     if args.analyze_only:

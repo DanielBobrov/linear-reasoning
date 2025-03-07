@@ -6,7 +6,7 @@ from collections import Counter
 def analyze_dataset():
     print("It works")
     """Analyze the dataset structure, particularly length differences between input and target"""
-    data_dir = Path(__file__).parent.absolute() / "data"
+    data_dir = Path("/kaggle/input/paper-data/data/comparison.1000.12.6")
     
     # Check data files
     file_types = ["train.json", "valid.json", "test.json"]
