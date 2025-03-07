@@ -22,25 +22,32 @@ class SimpleTokenizer:
         # Мы сохраняем только mask_token_id, так как он используется в данных
         self.mask_token_id = self.token_to_id.get("<mask>") if "<mask>" in self.token_to_id else None
         
-        
     def encode(self, text: str) -> List[int]:
         """Encode text into token ids"""
         # For our case, the text already contains tokens like <e_X>
-        tokens = ["<"+i+">" for i in text[1:-1].split("><")]
+        tokens = text.split()
         ids = []
         
         for token in tokens:
             if token in self.token_to_id:
                 ids.append(self.token_to_id[token])
             else:
-                # Handle unknown tokens
-                print(f"Warning: Token not found in vocabulary: {token}")
+                # Если токен не найден - это критическая ошибка
+                raise ValueError(f"Token not found in vocabulary: '{token}'. This indicates a bug in tokenization logic!")
         
         return ids
     
     def decode(self, token_ids: List[int]) -> str:
         """Decode token ids back to text"""
-        return " ".join([self.id_to_token[id] for id in token_ids if id in self.id_to_token])
+        tokens = []
+        for id in token_ids:
+            if id in self.id_to_token:
+                tokens.append(self.id_to_token[id])
+            else:
+                # Если ID токена за пределами словаря - это критическая ошибка
+                raise ValueError(f"Token ID {id} is out of vocabulary range (0-{self.vocab_size-1}). This indicates a bug in the model or data processing!")
+        
+        return " ".join(tokens)
     
     def batch_encode(self, texts: List[str]):
         """Encode a batch of texts"""

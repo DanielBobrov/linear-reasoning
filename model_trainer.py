@@ -192,7 +192,7 @@ def train_model(
     print(f"Loading tokenizer from: {vocab_path}")
     tokenizer = SimpleTokenizer(vocab_path)
     
-    # Создаем конфигурацию модели
+    # Создаем конфигурацию модели с vocab_size из загруженного токенизатора
     from kaggle_run import SmallRecRNNConfig
     model_config = SmallRecRNNConfig(
         vocab_size=tokenizer.vocab_size,
@@ -206,6 +206,8 @@ def train_model(
         block_size=256,
         mean_recurrence=6,
     )
+    
+    print(f"Model configuration: vocab_size={model_config.vocab_size}, hidden_size={model_config.hidden_size}")
     
     # Создаем модель
     print("Creating model...")
@@ -222,19 +224,19 @@ def train_model(
     print(f"Training data: {len(train_dataset)} samples")
     print(f"Validation data: {len(val_dataset)} samples")
     
-    # Создаем загрузчики данных с нашей оптимизированной функцией collate
-    collate_fn = lambda batch: optimized_collate_fn(batch, tokenizer, block_size=model_config.block_size)
+    # Создаем загрузчики данных с обычной функцией collate без лишних проверок
+    # Убираем "безопасный" collator, так как токенизатор должен выбрасывать исключения при проблемах
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size, 
         shuffle=True, 
-        collate_fn=collate_fn
+        collate_fn=lambda batch: optimized_collate_fn(batch, tokenizer, block_size=model_config.block_size)
     )
     val_loader = DataLoader(
         val_dataset, 
         batch_size=batch_size, 
         shuffle=False, 
-        collate_fn=collate_fn
+        collate_fn=lambda batch: optimized_collate_fn(batch, tokenizer, block_size=model_config.block_size)
     )
     
     # Функция потерь и оптимизатор
@@ -257,6 +259,10 @@ def train_model(
             t.set_description(f"Epoch {epoch+1}/{epochs}")
             
             for input_ids, target_ids, _ in t:
+                # Skip empty batches
+                if input_ids.size(0) == 0:
+                    continue
+                
                 # Перемещаем данные на устройство
                 input_ids = input_ids.to(device)
                 target_ids = target_ids.to(device)

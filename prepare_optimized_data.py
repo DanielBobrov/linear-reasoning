@@ -66,6 +66,9 @@ def prepare_optimized_data():
     optimized_dir = working_dir / "optimized"
     optimized_dir.mkdir(parents=True, exist_ok=True)
     
+    # Определим максимальный индекс токена в словаре
+    max_token_id = tokenizer.vocab_size - 1
+    
     # Process each available file
     for file_name in ["train.json", "valid.json", "test.json"]:
         file_path = data_dir / file_name
@@ -80,31 +83,49 @@ def prepare_optimized_data():
         
         # Tokenize and optimize data
         optimized_data = []
+        invalid_items = 0
         for item in tqdm(data, desc=f"Optimizing {file_name}"):
-            input_tokens = tokenizer.encode(item['input_text'])
-            target_tokens = tokenizer.encode(item['target_text'])
-            
-            # Extract just the attribute token (second-to-last token)
-            # Target is now just a single token - the attribute to predict
-            attribute_token = target_tokens[-2] if len(target_tokens) >= 2 else None
-            
-            if attribute_token is None:
-                print(f"Warning: item has no attribute token to predict: {item}")
-                continue
+            try:
+                input_tokens = tokenizer.encode(item['input_text'])
+                target_tokens = tokenizer.encode(item['target_text'])
                 
-            optimized_item = {
-                'input_ids': input_tokens,
-                'target_id': attribute_token,  # Single token target
-                'type': item.get('type', 'unknown'),
-            }
-            optimized_data.append(optimized_item)
+                # Проверка на валидность индексов токенов
+                if any(tid > max_token_id or tid < 0 for tid in input_tokens) or \
+                   any(tid > max_token_id or tid < 0 for tid in target_tokens):
+                    print(f"Warning: Item contains out-of-range token IDs. Skipping: {item}")
+                    invalid_items += 1
+                    continue
+                
+                # Extract just the attribute token (second-to-last token)
+                # Target is now just a single token - the attribute to predict
+                if len(target_tokens) < 2:
+                    raise ValueError(f"Target sequence too short: {item['target_text']}")
+                
+                attribute_token = target_tokens[-2]
+                
+                if attribute_token > max_token_id or attribute_token < 0:
+                    print(f"Warning: attribute token ID {attribute_token} is out of range. Skipping: {item}")
+                    invalid_items += 1
+                    continue
+                
+                optimized_item = {
+                    'input_ids': input_tokens,
+                    'target_id': attribute_token,  # Single token target
+                    'type': item.get('type', 'unknown'),
+                }
+                optimized_data.append(optimized_item)
+            except Exception as e:
+                # При любой ошибке обработки - выводим понятное сообщение и прерываем выполнение
+                print(f"Error processing item: {e}")
+                print(f"Problematic item: {item}")
+                raise  # Повторно вызываем исключение, чтобы процесс завершился с ошибкой
         
         # Save optimized data ТОЛЬКО в /kaggle/working
         output_file = optimized_dir / f"{file_name.replace('.json', '_optimized.json')}"
         with open(output_file, 'w') as f:
             json.dump(optimized_data, f)
             
-        print(f"Saved optimized data to {output_file} ({len(optimized_data)} samples)")
+        print(f"Saved optimized data to {output_file} ({len(optimized_data)} samples, {invalid_items} invalid items skipped)")
     
     # Create a metadata file that the dataloader can use
     metadata = {

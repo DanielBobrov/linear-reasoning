@@ -5,6 +5,9 @@ import torch
 import argparse
 from pathlib import Path
 
+# Добавляем корневую директорию в PYTHONPATH
+current_dir = Path(__file__).parent.absolute()
+sys.path.append(str(current_dir))
 
 # Определяем конфигурацию модели прямо здесь
 from dataclasses import dataclass
@@ -15,7 +18,7 @@ import torch.nn as nn
 class SmallRecRNNConfig:
     """Configuration for the smaller RecRNN model (30M parameters)"""
     # Model architecture
-    vocab_size: int = 1205  # Based on the provided vocab.json
+    vocab_size: int  # Будет определено динамически
     hidden_size: int = 768  # Default value, can be overridden
     intermediate_size: int = 2048  # Can be calculated as hidden_size * 2
     num_hidden_layers: int = 4  # Reduced from 8 (1 encoder + 2 recurrent + 1 decoder)
@@ -65,6 +68,37 @@ def run_small_model():
     output_dir = working_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     
+    # Сначала загружаем токенизатор, чтобы получить размер словаря
+    vocab_paths = [
+        data_dir / "vocab.json",
+        working_dir / "data/vocab.json"
+    ]
+    
+    vocab_path = None
+    for path in vocab_paths:
+        if path.exists():
+            vocab_path = path
+            break
+    
+    if vocab_path is None:
+        print("ERROR: vocab.json не найден! Ищем альтернативные пути...")
+        # Ищем vocab.json в любом месте
+        vocab_paths = list(Path("/kaggle").glob("**/vocab.json"))
+        if vocab_paths:
+            vocab_path = str(vocab_paths[0])
+            print(f"Найден словарь: {vocab_path}")
+        else:
+            print("Словарь не найден! Используем значение по умолчанию - 1205 токенов")
+            vocab_path = None
+            vocab_size = 1205  # Fallback значение в случае отсутствия словаря
+    
+    if vocab_path:
+        # Загружаем токенизатор и определяем размер словаря динамически
+        print(f"Загружаем токенизатор из: {vocab_path}")
+        tokenizer = SimpleTokenizer(vocab_path)
+        vocab_size = tokenizer.vocab_size
+        print(f"Размер словаря: {vocab_size} токенов")
+    
     if args.analyze_only:
         print("Analyzing dataset...")
         import subprocess
@@ -84,9 +118,9 @@ def run_small_model():
         print("Data preparation complete. Exiting as requested.")
         return
     
-    # Create model configuration
+    # Create model configuration - теперь с динамически определенным vocab_size
     model_config = SmallRecRNNConfig(
-        vocab_size=1205,  # From the vocab.json file
+        vocab_size=vocab_size,
         hidden_size=args.hidden_size,
         intermediate_size=args.hidden_size * 2,
         num_hidden_layers=4,
@@ -104,6 +138,7 @@ def run_small_model():
     
     # Print information about training configuration
     print("\nModel Configuration:")
+    print(f"  Vocabulary Size: {model_config.vocab_size}")
     print(f"  Hidden Size: {model_config.hidden_size}")
     print(f"  Intermediate Size: {model_config.intermediate_size}")
     print(f"  Attention Heads: {model_config.num_attention_heads}")
