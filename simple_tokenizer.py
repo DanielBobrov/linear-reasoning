@@ -25,7 +25,7 @@ class SimpleTokenizer:
     def encode(self, text: str) -> List[int]:
         """Encode text into token ids"""
         # For our case, the text already contains tokens like <e_X>
-        tokens = text.split()
+        tokens = ["<"+i+">" for i in text[1:-1].split("><")]
         ids = []
         
         for token in tokens:
