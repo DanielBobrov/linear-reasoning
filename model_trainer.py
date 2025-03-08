@@ -391,12 +391,13 @@ def train_model(
             attention_mask = (input_ids == tokenizer.pad_id)
             
             # Используем случайное число итераций как в статье
-            # Логнормальное распределение со средним mean_recurrence
+            # Исправление: используем тензоры float для torch.normal или альтернативный метод
             if model.training:
                 # Случайное количество итераций в пределах [1, 2*mean_recurrence]
+                # Исправленная версия с float тензорами
                 num_recurrence = max(1, int(torch.normal(
-                    mean=torch.tensor([model_config.mean_recurrence]), 
-                    std=torch.tensor([model_config.mean_recurrence/2])
+                    mean=torch.tensor([float(model_config.mean_recurrence)]), 
+                    std=torch.tensor([float(model_config.mean_recurrence/2)])
                 ).item()))
                 num_recurrence = min(num_recurrence, 2 * model_config.mean_recurrence)
             else:
