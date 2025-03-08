@@ -31,22 +31,22 @@ class SimpleTokenizer:
         # For our case, the text already contains tokens like <e_X>
         tokens = ["<"+i+">" for i in text[1:-1].split("><")]
         ids = []
-        for token in tokens:
+        for i, token in enumerate(tokens):
             if token in self.token_to_id:
                 ids.append(self.token_to_id[token])
             else:
-                raise ValueError(f"Token '{token}' not found in vocabulary (text: {text})")
+                raise ValueError(f"Token '{token}' (#{i+1}) not found in vocabulary in text: '{text}'")
         
         return ids
     
     def decode(self, token_ids: List[int]) -> str:
         """Decode token ids back to text"""
         tokens = []
-        for id in token_ids:
+        for i, id in enumerate(token_ids):
             if id in self.id_to_token:
                 tokens.append(self.id_to_token[id])
             else:
-                raise ValueError(f"Token ID {id} not found in vocabulary (range: 0-{self.vocab_size-1})")
+                raise ValueError(f"Token ID {id} (position {i}) not found in vocabulary (range: 0-{self.vocab_size-1})")
         
         return "".join(tokens)  # Объединяем без пробелов для формата <token1><token2>
     

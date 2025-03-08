@@ -276,48 +276,54 @@ def train_model(
     train_losses = []
     val_losses = []
     
-    for epoch in range(epochs):
+    # tqdm для отображения общего прогресса по эпохам
+    epochs_pbar = tqdm(range(epochs), desc="Training progress")
+    
+    for epoch in epochs_pbar:
         # Обучение
         model.train()
         train_loss = 0.0
         train_correct = 0
         train_total = 0
         
-        with tqdm(train_loader, unit="batch") as t:
-            t.set_description(f"Epoch {epoch+1}/{epochs}")
-            
-            for input_ids, target_ids, _ in t:
-                # Skip empty batches
-                if input_ids.size(0) == 0:
-                    continue
-                
-                # Перемещаем данные на устройство
-                input_ids = input_ids.to(device)
-                target_ids = target_ids.to(device)
-                
-                # Создаем маску внимания (1 для паддинг-токенов)
-                attention_mask = (input_ids == tokenizer.pad_id)
-                
-                # Прямой проход
-                logits = model(input_ids, attention_mask)
-                loss = criterion(logits, target_ids)
-                
-                # Обратный проход и оптимизация
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                
-                # Отслеживаем статистику
-                train_loss += loss.item()
-                _, predicted = torch.max(logits, 1)
-                train_total += target_ids.size(0)
-                train_correct += (predicted == target_ids).sum().item()
-                
-                # Обновляем progress bar
-                t.set_postfix(loss=f"{loss.item():.4f}", accuracy=f"{100*train_correct/train_total:.2f}%")
+        # Используем один tqdm на эпоху
+        batch_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=False)
         
-        avg_train_loss = train_loss / len(train_loader)
-        train_accuracy = 100 * train_correct / train_total
+        for input_ids, target_ids, _ in batch_pbar:
+            # Проверка на пустые батчи - критично!
+            if input_ids.size(0) == 0:
+                continue
+                
+            # Перемещаем данные на устройство
+            input_ids = input_ids.to(device)
+            target_ids = target_ids.to(device)
+            
+            # Создаем маску внимания (1 для паддинг-токенов)
+            attention_mask = (input_ids == tokenizer.pad_id)
+            
+            # Прямой проход
+            logits = model(input_ids, attention_mask)
+            loss = criterion(logits, target_ids)
+            
+            # Обратный проход и оптимизация
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            # Отслеживаем статистику
+            train_loss += loss.item()
+            _, predicted = torch.max(logits, 1)
+            train_total += target_ids.size(0)
+            train_correct += (predicted == target_ids).sum().item()
+            
+            # Обновляем tqdm
+            batch_pbar.set_postfix(
+                loss=f"{loss.item():.4f}", 
+                accuracy=f"{100*train_correct/train_total:.2f}%"
+            )
+        
+        avg_train_loss = train_loss / len(train_loader) if len(train_loader) > 0 else float('inf')
+        train_accuracy = 100 * train_correct / train_total if train_total > 0 else 0
         train_losses.append(avg_train_loss)
         
         # Валидация
@@ -327,7 +333,12 @@ def train_model(
         val_total = 0
         
         with torch.no_grad():
-            for input_ids, target_ids, _ in tqdm(val_loader, desc="Validating"):
+            val_pbar = tqdm(val_loader, desc="Validating", leave=False)
+            for input_ids, target_ids, _ in val_pbar:
+                # Проверка на пустые батчи - критично!
+                if input_ids.size(0) == 0:
+                    continue
+                    
                 # Перемещаем данные на устройство
                 input_ids = input_ids.to(device)
                 target_ids = target_ids.to(device)
@@ -344,14 +355,24 @@ def train_model(
                 _, predicted = torch.max(logits, 1)
                 val_total += target_ids.size(0)
                 val_correct += (predicted == target_ids).sum().item()
+                
+                # Обновляем tqdm
+                val_pbar.set_postfix(
+                    loss=f"{loss.item():.4f}", 
+                    accuracy=f"{100*val_correct/val_total:.2f}%"
+                )
         
-        avg_val_loss = val_loss / len(val_loader)
-        val_accuracy = 100 * val_correct / val_total
+        avg_val_loss = val_loss / len(val_loader) if len(val_loader) > 0 else float('inf')
+        val_accuracy = 100 * val_correct / val_total if val_total > 0 else 0
         val_losses.append(avg_val_loss)
         
-        print(f"Epoch {epoch+1}/{epochs} - "
-              f"Train Loss: {avg_train_loss:.4f}, Train Acc: {train_accuracy:.2f}%, "
-              f"Val Loss: {avg_val_loss:.4f}, Val Acc: {val_accuracy:.2f}%")
+        # Обновляем главный tqdm с результатами эпохи
+        epochs_pbar.set_postfix(
+            train_loss=f"{avg_train_loss:.4f}", 
+            train_acc=f"{train_accuracy:.2f}%",
+            val_loss=f"{avg_val_loss:.4f}", 
+            val_acc=f"{val_accuracy:.2f}%"
+        )
         
         # Сохраняем лучшую модель
         if avg_val_loss < best_val_loss:

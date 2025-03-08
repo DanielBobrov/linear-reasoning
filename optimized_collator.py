@@ -27,19 +27,28 @@ def optimized_collate_fn(
     # Обеспечиваем, чтобы pad_id был корректным
     pad_id = tokenizer.pad_id if tokenizer is not None and hasattr(tokenizer, 'pad_id') else 0
     if pad_id < 0:
-        print("WARNING: Negative padding ID detected. Setting to 0.")
-        pad_id = 0
-    
-    # Находим максимальное значение токена в батче для диагностики
-    max_token_value = -1
-    for item in batch:
-        if 'input_ids' in item:
-            max_token_value = max(max_token_value, max(item['input_ids']) if item['input_ids'] else -1)
-        if 'target_id' in item:
-            max_token_value = max(max_token_value, item['target_id'])
+        raise ValueError(f"Padding ID должен быть неотрицательным, получено: {pad_id}")
     
     vocab_size = getattr(tokenizer, 'vocab_size', 1106)
-    print(f"Collator: max_token={max_token_value}, vocab_size={vocab_size}")
+    
+    # Проверяем все токены перед обработкой
+    for i, item in enumerate(batch):
+        if 'input_ids' not in item:
+            raise ValueError(f"В элементе {i} отсутствует ключ input_ids: {item}")
+        if 'target_id' not in item:
+            raise ValueError(f"В элементе {i} отсутствует ключ target_id: {item}")
+            
+        # Проверка входных токенов
+        for j, token_id in enumerate(item['input_ids']):
+            if not (0 <= token_id < vocab_size):
+                raise ValueError(f"Невалидный токен ID {token_id} в input_ids[{j}] элемента {i}. "
+                               f"Допустимый диапазон: [0, {vocab_size-1}].")
+        
+        # Проверка целевого токена
+        target_id = item['target_id']
+        if not (0 <= target_id < vocab_size):
+            raise ValueError(f"Невалидный целевой токен ID {target_id} в элементе {i}. "
+                           f"Допустимый диапазон: [0, {vocab_size-1}].")
     
     # Получаем максимальную длину последовательностей в этом батче
     max_length = max(len(item["input_ids"]) for item in batch)
@@ -50,44 +59,6 @@ def optimized_collate_fn(
     # Если запрошено дополнение до block_size
     if pad_to_block_size:
         max_length = block_size
-    
-    # Проверка всех данных на соответствие размерам vocab_size
-    valid_batch = []
-    max_id_seen = -1
-    
-    for item in batch:
-        is_valid = True
-        # Проверяем входные данные
-        for token_id in item["input_ids"]:
-            max_id_seen = max(max_id_seen, token_id)
-            if token_id < 0 or token_id >= vocab_size:
-                print(f"Warning: Input token ID {token_id} out of range (vocab_size={vocab_size})")
-                is_valid = False
-                break
-                
-        # Проверяем целевой токен
-        target_id = item["target_id"]
-        max_id_seen = max(max_id_seen, target_id)
-        if target_id < 0 or target_id >= vocab_size:
-            print(f"Warning: Target token ID {target_id} out of range (vocab_size={vocab_size})")
-            is_valid = False
-        
-        if is_valid:
-            valid_batch.append(item)
-    
-    # Если есть невалидные элементы, выводим статистику
-    invalid_count = len(batch) - len(valid_batch)
-    if invalid_count > 0:
-        print(f"WARNING: Filtered {invalid_count} invalid samples with tokens outside range [0, {vocab_size-1}]")
-        print(f"Highest token ID observed: {max_id_seen}")
-    
-    # Если все образцы неправильные, возвращаем пустые тензоры
-    if not valid_batch:
-        print("ERROR: Entire batch is invalid! Returning empty tensors.")
-        return torch.zeros((0, 1), dtype=torch.long), torch.zeros((0,), dtype=torch.long), []
-    
-    # Используем только валидные элементы
-    batch = valid_batch
     
     # Подготавливаем тензоры
     input_ids = torch.full((len(batch), max_length), pad_id, dtype=torch.long)
