@@ -426,7 +426,7 @@ def train_model(
               f"Val Loss: {avg_val_loss:.4f}, Val Acc: {val_accuracy:.2f}%, "
               f"LR: {current_lr:.2e}")
         
-        if epoch == 0 или epoch == epochs - 1 или epoch % 5 == 0:
+        if epoch == 0 or epoch == epochs - 1 or epoch % 5 == 0:
             print("\nDiagnostic check:")
             for name, param in model.named_parameters():
                 if 'weight' in name and len(param.shape) >= 2:
