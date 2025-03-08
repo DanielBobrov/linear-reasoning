@@ -15,40 +15,47 @@ from simple_tokenizer import SimpleTokenizer
 from optimized_collator import optimized_collate_fn
 
 class SingleTokenClassifier(nn.Module):
-    """Простой классификатор, который предсказывает один токен на основе входной последовательности."""
+    """Классификатор на основе рекуррентной архитектуры RecRNN."""
     def __init__(self, config):
         super().__init__()
         self.config = config
         
-        # Обеспечим, чтобы vocab_size было корректным, добавив запас на всякий случай
+        # Проверка параметров
         self.vocab_size = config.vocab_size
-        print(f"Initializing embedding with vocab_size={self.vocab_size}")
+        print(f"Initializing model with vocab_size={self.vocab_size}, hidden_size={config.hidden_size}")
         
-        # Проверяем, не слишком ли мал размер словаря
-        if self.vocab_size < 1500:  # Просто для безопасности
+        # Добавляем запас для словаря если необходимо
+        if self.vocab_size < 1500:
             print(f"WARNING: Vocab size {self.vocab_size} seems small. Adding padding to be safe.")
-            self.vocab_size = max(self.vocab_size + 10, 1200)  # Добавляем запас
+            self.vocab_size = max(self.vocab_size + 10, 1200)
             
-        # Простая конфигурация трансформера
-        self.embedding = nn.Embedding(self.vocab_size, config.hidden_size, padding_idx=0)  # Используем 0 как padding_idx
+        # Эмбеддинг слой
+        self.embedding = nn.Embedding(self.vocab_size, config.hidden_size, padding_idx=0)
         
-        # Слои энкодера (упрощенные блоки трансформера)
+        # Применяем инициализацию весов как в оригинале
+        self.apply(self._init_weights)
+        
+        # Слои энкодера
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=config.hidden_size, 
             nhead=config.num_attention_heads,
             dim_feedforward=config.intermediate_size,
-            dropout=0.1,
-            batch_first=True
+            dropout=config.hidden_dropout_prob,
+            activation=config.hidden_act,
+            batch_first=True,
+            norm_first=True  # Важно: pre-LN архитектура как в оригинале
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=config.encoder_layers)
         
-        # Рекуррентный блок (рекурсивные слои трансформера)
+        # Рекуррентный блок (core block в оригинале)
         rec_layer = nn.TransformerEncoderLayer(
             d_model=config.hidden_size, 
             nhead=config.num_attention_heads,
             dim_feedforward=config.intermediate_size,
-            dropout=0.1,
-            batch_first=True
+            dropout=config.hidden_dropout_prob,
+            activation=config.hidden_act,
+            batch_first=True,
+            norm_first=True
         )
         self.recurrent_block = nn.TransformerEncoder(rec_layer, num_layers=config.recurrent_layers)
         self.mean_recurrence = getattr(config, "mean_recurrence", 6)
@@ -58,46 +65,59 @@ class SingleTokenClassifier(nn.Module):
             d_model=config.hidden_size, 
             nhead=config.num_attention_heads,
             dim_feedforward=config.intermediate_size,
-            dropout=0.1,
-            batch_first=True
+            dropout=config.hidden_dropout_prob,
+            activation=config.hidden_act,
+            batch_first=True,
+            norm_first=True
         )
         self.decoder = nn.TransformerEncoder(decoder_layer, num_layers=config.decoder_layers)
         
         # Выходной слой
         self.classifier = nn.Linear(config.hidden_size, config.vocab_size)
         
+        # Оценка параметров для проверки
+        num_params = sum(p.numel() for p in self.parameters())
+        print(f"Model initialized with {num_params/1_000_000:.2f}M parameters")
+        
+    def _init_weights(self, module):
+        """Инициализация весов по аналогии с оригинальным train.py"""
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+        
     def forward(self, x, attention_mask=None):
+        # Преобразуем padding mask в attention mask для transformer encoders
+        # В оригинале используется src_key_padding_mask, который равен True для паддинг токенов
+        key_padding_mask = attention_mask if attention_mask is not None else None
+        
         # Эмбеддинг
         x = self.embedding(x)
         
         # Энкодер
-        if attention_mask is not None:
-            x = self.encoder(x, src_key_padding_mask=attention_mask)
-        else:
-            x = self.encoder(x)
+        x = self.encoder(x, src_key_padding_mask=key_padding_mask)
             
-        # Рекуррентный блок (применяется несколько раз)
+        # Рекуррентный блок (применяется несколько раз как в оригинале)
         for _ in range(self.mean_recurrence):
-            if attention_mask is not None:
-                x = self.recurrent_block(x, src_key_padding_mask=attention_mask)
-            else:
-                x = self.recurrent_block(x)
+            x = self.recurrent_block(x, src_key_padding_mask=key_padding_mask)
         
         # Декодер
-        if attention_mask is not None:
-            x = self.decoder(x, src_key_padding_mask=attention_mask)
-        else:
-            x = self.decoder(x)
+        x = self.decoder(x, src_key_padding_mask=key_padding_mask)
             
-        # Mean pooling для классификации
-        if attention_mask is not None:
-            # Создаем маску для исключения паддинг-токенов из среднего
-            mask = ~attention_mask
+        # Mean pooling для классификации с учетом padding mask
+        if key_padding_mask is not None:
+            # Инвертируем маску: True для токенов, которые нужно сохранить
+            mask = ~key_padding_mask
             mask = mask.float()
             # Применяем маску и усредняем
             x = (x * mask.unsqueeze(-1)).sum(1) / mask.sum(1, keepdim=True)
         else:
-            # Простое усреднение, если нет маски
+            # Простое усреднение
             x = torch.mean(x, dim=1)
         
         # Классификация
@@ -223,17 +243,22 @@ def train_model(
     # Создаем конфигурацию модели с vocab_size из загруженного токенизатора
     from kaggle_run import SmallRecRNNConfig
     model_config = SmallRecRNNConfig(
-        vocab_size=tokenizer.vocab_size,  # Используем обновленный размер словаря
-        hidden_size=768,  # Может быть настроен на основе требований
-        intermediate_size=2048,
+        vocab_size=tokenizer.vocab_size, 
+        hidden_size=512,  # Уменьшенный размер для модели ~30M параметров
+        intermediate_size=1024,
         num_hidden_layers=4,
         recurrent_layers=2,
-        encoder_layers=1,
+        encoder_layers=1, 
         decoder_layers=1,
         num_attention_heads=8,
         block_size=256,
         mean_recurrence=6,
     )
+    
+    # Проверка ожидаемого размера модели
+    estimated_params = model_config.estimate_params() if hasattr(model_config, "estimate_params") else "N/A"
+    print(f"Estimated model parameters: ~{estimated_params/1_000_000:.2f}M" 
+          if isinstance(estimated_params, (int, float)) else f"Estimation not available")
     
     print(f"Final model configuration: vocab_size={model_config.vocab_size}, hidden_size={model_config.hidden_size}")
     

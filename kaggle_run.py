@@ -19,8 +19,8 @@ class SmallRecRNNConfig:
     """Configuration for the smaller RecRNN model (30M parameters)"""
     # Model architecture
     vocab_size: int  # Будет определено динамически
-    hidden_size: int = 768  # Default value, can be overridden
-    intermediate_size: int = 2048  # Can be calculated as hidden_size * 2
+    hidden_size: int = 512  # Уменьшенный размер для модели ~30M параметров
+    intermediate_size: int = 1024  # 2x hidden_size для эффективных вычислений
     num_hidden_layers: int = 4  # Reduced from 8 (1 encoder + 2 recurrent + 1 decoder)
     recurrent_layers: int = 2  # Reduced recurrent layers
     encoder_layers: int = 1  # Reduced encoder layers
@@ -28,7 +28,7 @@ class SmallRecRNNConfig:
     num_attention_heads: int = 8  # Can be scaled with hidden_size
     block_size: int = 256  # Context window size
     
-    # Recurrence settings
+    # Recurrence settings from original model
     mean_recurrence: int = 6  # Default recurrence depth
     use_cache: bool = True  # Enable caching
     recurrent_chunk_size: Optional[int] = None  # Chunk size for recurrent processing
@@ -47,6 +47,34 @@ class SmallRecRNNConfig:
     def __post_init__(self):
         # Ensure parameters are consistent
         assert self.num_hidden_layers == self.encoder_layers + self.recurrent_layers + self.decoder_layers
+    
+    def estimate_params(self):
+        """Оценка количества параметров модели"""
+        # Эмбеддинги
+        embedding_params = self.vocab_size * self.hidden_size
+        
+        # Слои трансформера
+        layer_params = 4 * (self.hidden_size ** 2)
+        
+        # Учитываем proj слои и attention heads
+        attn_params = self.hidden_size * self.hidden_size * self.num_attention_heads 
+        
+        # Feedforward params
+        ff_params = self.hidden_size * self.intermediate_size * 2
+        
+        # Суммарно за один слой
+        per_layer = attn_params + ff_params + self.hidden_size * 2
+        
+        # Общее количество слоев
+        total_layers_params = per_layer * self.num_hidden_layers
+        
+        # Выходной слой
+        output_params = self.hidden_size * self.vocab_size
+        
+        # Итого
+        total_params = embedding_params + total_layers_params + output_params
+        
+        return total_params
 
 from simple_tokenizer import SimpleTokenizer, Tokenizer
 from optimized_collator import optimized_collate_fn
@@ -117,23 +145,28 @@ def run_small_model():
         print("Data preparation complete. Exiting as requested.")
         return
     
-    # Create model configuration - теперь с динамически определенным vocab_size
+    # Create model configuration - теперь с правильными параметрами для ~30M параметров
     model_config = SmallRecRNNConfig(
         vocab_size=vocab_size,
-        hidden_size=args.hidden_size,
-        intermediate_size=args.hidden_size * 2,
+        hidden_size=512,  # Reduced for 30M model
+        intermediate_size=1024,  # 2x hidden_size
         num_hidden_layers=4,
         recurrent_layers=2,
         encoder_layers=1,
         decoder_layers=1,
-        num_attention_heads=args.hidden_size // 128,  # Scale attention heads with model size
-        block_size=256
+        num_attention_heads=8,
+        block_size=256,
+        mean_recurrence=6  # Keep original recurrence depth
     )
+    
+    # Calculate estimated parameters
+    estimated_params = model_config.estimate_params()
     
     # Store model config for reference
     with open(output_dir / "small_model_config.json", "w") as f:
-        json.dump({k: v for k, v in model_config.__dict__.items() 
-                  if not k.startswith("_")}, f, indent=2)
+        config_dict = {k: v for k, v in model_config.__dict__.items() if not k.startswith("_")}
+        config_dict["estimated_parameters"] = estimated_params
+        json.dump(config_dict, f, indent=2)
     
     # Print information about training configuration
     print("\nModel Configuration:")
@@ -141,6 +174,10 @@ def run_small_model():
     print(f"  Hidden Size: {model_config.hidden_size}")
     print(f"  Intermediate Size: {model_config.intermediate_size}")
     print(f"  Attention Heads: {model_config.num_attention_heads}")
+    print(f"  Total Layers: {model_config.num_hidden_layers} (Encoder: {model_config.encoder_layers}, "
+          f"Recurrent: {model_config.recurrent_layers}, Decoder: {model_config.decoder_layers})")
+    print(f"  Mean Recurrence: {model_config.mean_recurrence}")
+    print(f"  Estimated Parameters: {estimated_params/1_000_000:.2f}M")
     print(f"  Batch Size: {args.batch_size}")
     print(f"  Epochs: {args.epochs}")
     print(f"  Learning Rate: {args.learning_rate}")
