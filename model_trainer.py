@@ -271,13 +271,13 @@ def train_model(
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
     
-    # Цикл обучения
+    # Оптимизированный цикл обучения
     best_val_loss = float('inf')
     train_losses = []
     val_losses = []
     
-    # Используем один прогресс-бар для всего тренировочного процесса вместо вложенных
-    # И настраиваем его для перезаписи одной строки
+    # Настраиваем прогресс-бар для обновления реже
+    update_interval = max(1, len(train_dataset) // (batch_size * 20))  # Примерно 20 обновлений за эпоху
     global_progress = tqdm(total=epochs * len(train_dataset) // batch_size, 
                           desc="Training", 
                           position=0,
@@ -291,8 +291,9 @@ def train_model(
         train_loss = 0.0
         train_correct = 0
         train_total = 0
+        batch_count = 0
         
-        # Не используем вложенный прогресс-бар для эпохи
+        # Итерация по батчам без вложенного прогресс-бара
         for input_ids, target_ids, _ in train_loader:
             # Проверка на пустые батчи
             if input_ids.size(0) == 0:
@@ -314,28 +315,40 @@ def train_model(
             loss.backward()
             optimizer.step()
             
-            # Отслеживаем статистику
+            # Отслеживаем статистику (без вычисления точности на каждой итерации)
             train_loss += loss.item()
-            _, predicted = torch.max(logits, 1)
-            train_total += target_ids.size(0)
-            train_correct += (predicted == target_ids).sum().item()
+            batch_count += 1
             
-            # Обновляем общий прогресс-бар
-            accuracy = 100 * train_correct / train_total if train_total > 0 else 0
-            global_progress.set_description(
-                f"Epoch {epoch+1}/{epochs} - Loss: {loss.item():.2f}, Accuracy: {accuracy:.2f}%"
-            )
-            global_progress.update()
+            # Обновляем информацию о точности только на некоторых итерациях
+            if batch_count % 10 == 0:  # рассчитываем точность каждые 10 батчей
+                _, predicted = torch.max(logits, 1)
+                train_total += target_ids.size(0)
+                train_correct += (predicted == target_ids).sum().item()
+            
+            # Обновляем прогресс-бар реже для повышения производительности
+            if batch_count % update_interval == 0:
+                accuracy = 100 * train_correct / train_total if train_total > 0 else 0
+                global_progress.set_description(
+                    f"Epoch {epoch+1}/{epochs} - Loss: {loss.item():.2f}, Accuracy: {accuracy:.2f}%"
+                )
+                global_progress.update(update_interval)
         
-        avg_train_loss = train_loss / len(train_loader) if len(train_loader) > 0 else float('inf')
+        # Обновляем оставшийся прогресс в конце эпохи
+        remaining_steps = batch_count % update_interval
+        if remaining_steps > 0:
+            global_progress.update(remaining_steps)
+        
+        # Вычисляем средние значения метрик за эпоху
+        avg_train_loss = train_loss / batch_count if batch_count > 0 else float('inf')
         train_accuracy = 100 * train_correct / train_total if train_total > 0 else 0
         train_losses.append(avg_train_loss)
         
-        # Валидация (без прогресс-бара, чтобы не портить вывод)
+        # Валидация с меньшей частотой вычислений
         model.eval()
         val_loss = 0.0
         val_correct = 0
         val_total = 0
+        val_batch_count = 0
         
         with torch.no_grad():
             for input_ids, target_ids, _ in val_loader:
@@ -354,11 +367,15 @@ def train_model(
                 logits = model(input_ids, attention_mask)
                 loss = criterion(logits, target_ids)
                 
-                # Отслеживаем статистику
+                # Отслеживаем статистику (без вычисления точности на каждой итерации)
                 val_loss += loss.item()
-                _, predicted = torch.max(logits, 1)
-                val_total += target_ids.size(0)
-                val_correct += (predicted == target_ids).sum().item()
+                val_batch_count += 1
+                
+                # Вычисляем точность только для части батчей
+                if val_batch_count % 5 == 0:  # каждые 5 батчей
+                    _, predicted = torch.max(logits, 1)
+                    val_total += target_ids.size(0)
+                    val_correct += (predicted == target_ids).sum().item()
         
         avg_val_loss = val_loss / len(val_loader) if len(val_loader) > 0 else float('inf')
         val_accuracy = 100 * val_correct / val_total if val_total > 0 else 0
