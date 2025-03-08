@@ -86,7 +86,7 @@ def run_small_model():
     parser.add_argument("--hidden-size", type=int, default=768, help="Hidden size of the model")
     parser.add_argument("--batch-size", type=int, default=32, help="Micro batch size")
     parser.add_argument("--optimize-data", action="store_true", help="Use optimized data format with single token targets")
-    parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
+    parser.add_argument('--epochs', type=int, default=20, help="Number of training epochs") 
     parser.add_argument("--learning-rate", type=float, default=1e-4, help="Learning rate")
     args = parser.parse_args()
 

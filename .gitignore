@@ -30,3 +30,4 @@ output/
 checkpoints/
 *.pt
 data/
+runs/
