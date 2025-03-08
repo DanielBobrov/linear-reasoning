@@ -454,7 +454,7 @@ def train_model(
                 'train_loss': avg_train_loss,
                 'val_loss': avg_val_loss,
                 'val_accuracy': val_accuracy,
-            }, output_dir / "best_model.pt", weights_only=True)
+            }, output_dir / "best_model.pt")  
             print(f"New best model saved with validation loss: {best_val_loss:.4f}")
     
     global_progress.close()
@@ -467,7 +467,7 @@ def train_model(
         'val_loss': val_losses[-1],
         'train_accuracy': train_accuracy,
         'val_accuracy': val_accuracy,
-    }, output_dir / "final_model.pt", weights_only=True)
+    }, output_dir / "final_model.pt")  
     
     history = {
         'train_loss': train_losses,
