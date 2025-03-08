@@ -276,21 +276,25 @@ def train_model(
     train_losses = []
     val_losses = []
     
-    # tqdm для отображения общего прогресса по эпохам
-    epochs_pbar = tqdm(range(epochs), desc="Training progress")
+    # Используем один прогресс-бар для всего тренировочного процесса вместо вложенных
+    # И настраиваем его для перезаписи одной строки
+    global_progress = tqdm(total=epochs * len(train_dataset) // batch_size, 
+                          desc="Training", 
+                          position=0,
+                          leave=True,
+                          ncols=100,
+                          bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
     
-    for epoch in epochs_pbar:
+    for epoch in range(epochs):
         # Обучение
         model.train()
         train_loss = 0.0
         train_correct = 0
         train_total = 0
         
-        # Используем один tqdm на эпоху
-        batch_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=False)
-        
-        for input_ids, target_ids, _ in batch_pbar:
-            # Проверка на пустые батчи - критично!
+        # Не используем вложенный прогресс-бар для эпохи
+        for input_ids, target_ids, _ in train_loader:
+            # Проверка на пустые батчи
             if input_ids.size(0) == 0:
                 continue
                 
@@ -316,26 +320,26 @@ def train_model(
             train_total += target_ids.size(0)
             train_correct += (predicted == target_ids).sum().item()
             
-            # Обновляем tqdm
-            batch_pbar.set_postfix(
-                loss=f"{loss.item():.4f}", 
-                accuracy=f"{100*train_correct/train_total:.2f}%"
+            # Обновляем общий прогресс-бар
+            accuracy = 100 * train_correct / train_total if train_total > 0 else 0
+            global_progress.set_description(
+                f"Epoch {epoch+1}/{epochs} - Loss: {loss.item():.2f}, Accuracy: {accuracy:.2f}%"
             )
+            global_progress.update()
         
         avg_train_loss = train_loss / len(train_loader) if len(train_loader) > 0 else float('inf')
         train_accuracy = 100 * train_correct / train_total if train_total > 0 else 0
         train_losses.append(avg_train_loss)
         
-        # Валидация
+        # Валидация (без прогресс-бара, чтобы не портить вывод)
         model.eval()
         val_loss = 0.0
         val_correct = 0
         val_total = 0
         
         with torch.no_grad():
-            val_pbar = tqdm(val_loader, desc="Validating", leave=False)
-            for input_ids, target_ids, _ in val_pbar:
-                # Проверка на пустые батчи - критично!
+            for input_ids, target_ids, _ in val_loader:
+                # Проверка на пустые батчи
                 if input_ids.size(0) == 0:
                     continue
                     
@@ -355,24 +359,15 @@ def train_model(
                 _, predicted = torch.max(logits, 1)
                 val_total += target_ids.size(0)
                 val_correct += (predicted == target_ids).sum().item()
-                
-                # Обновляем tqdm
-                val_pbar.set_postfix(
-                    loss=f"{loss.item():.4f}", 
-                    accuracy=f"{100*val_correct/val_total:.2f}%"
-                )
         
         avg_val_loss = val_loss / len(val_loader) if len(val_loader) > 0 else float('inf')
         val_accuracy = 100 * val_correct / val_total if val_total > 0 else 0
         val_losses.append(avg_val_loss)
         
-        # Обновляем главный tqdm с результатами эпохи
-        epochs_pbar.set_postfix(
-            train_loss=f"{avg_train_loss:.4f}", 
-            train_acc=f"{train_accuracy:.2f}%",
-            val_loss=f"{avg_val_loss:.4f}", 
-            val_acc=f"{val_accuracy:.2f}%"
-        )
+        # Печатаем статистику эпохи на отдельной строке
+        print(f"\nEpoch {epoch+1}/{epochs} - "
+              f"Train Loss: {avg_train_loss:.4f}, Train Acc: {train_accuracy:.2f}%, "
+              f"Val Loss: {avg_val_loss:.4f}, Val Acc: {val_accuracy:.2f}%")
         
         # Сохраняем лучшую модель
         if avg_val_loss < best_val_loss:
@@ -387,6 +382,9 @@ def train_model(
                 'val_accuracy': val_accuracy,
             }, output_dir / "best_model.pt")
             print(f"New best model saved with validation loss: {best_val_loss:.4f}")
+    
+    # Закрываем прогресс-бар в конце
+    global_progress.close()
     
     # Сохраняем финальную модель
     torch.save({
