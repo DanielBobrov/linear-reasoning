@@ -20,6 +20,12 @@ class SmallRecRNNConfig:
     use_cache: bool = True  # Enable caching for inference
     recurrent_chunk_size: Optional[int] = None  # Chunk size for recurrent processing
     
+    # Добавляем настройки из оригинальной статьи RecRNN
+    recurrence_std: float = 0.5  # Стандартное отклонение для случайного выбора числа итераций
+    use_sandwich_norm: bool = True  # Использовать ли "сэндвич" нормализацию для рекуррентного блока
+    random_recurrence: bool = True  # Использовать ли случайное число итераций при обучении
+    max_recurrence: int = 12  # Максимальное число итераций (2 * mean_recurrence)
+    
     # Regularization settings - оставляем как в оригинальной модели
     hidden_dropout_prob: float = 0.1
     attention_probs_dropout_prob: float = 0.1

@@ -15,7 +15,7 @@ from simple_tokenizer import SimpleTokenizer
 from optimized_collator import optimized_collate_fn
 
 class SingleTokenClassifier(nn.Module):
-    """Классификатор на основе рекуррентной архитектуры RecRNN."""
+    """Классификатор на основе рекуррентной архитектуры RecRNN из статьи."""
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -32,10 +32,10 @@ class SingleTokenClassifier(nn.Module):
         # Эмбеддинг слой
         self.embedding = nn.Embedding(self.vocab_size, config.hidden_size, padding_idx=0)
         
-        # Применяем инициализацию весов как в оригинале
-        self.apply(self._init_weights)
+        # Специфическая для RecRNN нормализация перед энкодером
+        self.pre_encoder_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         
-        # Слои энкодера
+        # Слои энкодера - используем norm_first=True согласно статье
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=config.hidden_size, 
             nhead=config.num_attention_heads,
@@ -43,11 +43,15 @@ class SingleTokenClassifier(nn.Module):
             dropout=config.hidden_dropout_prob,
             activation=config.hidden_act,
             batch_first=True,
-            norm_first=True  # Важно: pre-LN архитектура как в оригинале
+            norm_first=True  # Как в оригинальной статье RecRNN
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=config.encoder_layers)
         
-        # Рекуррентный блок (core block в оригинале)
+        # Нормализация для "сэндвича" вокруг рекуррентного блока
+        self.pre_recurrent_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.post_recurrent_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        
+        # Рекуррентный блок с правильной архитектурой pre-LN
         rec_layer = nn.TransformerEncoderLayer(
             d_model=config.hidden_size, 
             nhead=config.num_attention_heads,
@@ -55,12 +59,15 @@ class SingleTokenClassifier(nn.Module):
             dropout=config.hidden_dropout_prob,
             activation=config.hidden_act,
             batch_first=True,
-            norm_first=True
+            norm_first=True  # Как в оригинальной статье RecRNN
         )
         self.recurrent_block = nn.TransformerEncoder(rec_layer, num_layers=config.recurrent_layers)
         self.mean_recurrence = getattr(config, "mean_recurrence", 6)
         
-        # Слои декодера
+        # Нормализация перед декодером
+        self.pre_decoder_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        
+        # Слои декодера также с pre-LN
         decoder_layer = nn.TransformerEncoderLayer(
             d_model=config.hidden_size, 
             nhead=config.num_attention_heads,
@@ -68,48 +75,73 @@ class SingleTokenClassifier(nn.Module):
             dropout=config.hidden_dropout_prob,
             activation=config.hidden_act,
             batch_first=True,
-            norm_first=True
+            norm_first=True  # Как в оригинальной статье RecRNN
         )
         self.decoder = nn.TransformerEncoder(decoder_layer, num_layers=config.decoder_layers)
         
+        # Финальная нормализация перед классификацией
+        self.final_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        
         # Выходной слой
         self.classifier = nn.Linear(config.hidden_size, config.vocab_size)
+        
+        # Применяем инициализацию весов как в оригинале
+        self.apply(self._init_weights)
         
         # Оценка параметров для проверки
         num_params = sum(p.numel() for p in self.parameters())
         print(f"Model initialized with {num_params/1_000_000:.2f}M parameters")
         
     def _init_weights(self, module):
-        """Инициализация весов по аналогии с оригинальным train.py"""
+        """Улучшенная инициализация весов для стабильности обучения"""
         if isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            # Используем более строгую инициализацию для линейных слоев
+            nn.init.xavier_uniform_(module.weight, gain=1.0 / (2.0 ** 0.5))
             if module.bias is not None:
-                module.bias.data.zero_()
+                nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range / 2.0)
         elif isinstance(module, nn.LayerNorm):
-            module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
+            nn.init.ones_(module.weight)
+            nn.init.zeros_(module.bias)
         
-    def forward(self, x, attention_mask=None):
-        # Преобразуем padding mask в attention mask для transformer encoders
-        # В оригинале используется src_key_padding_mask, который равен True для паддинг токенов
+    def forward(self, x, attention_mask=None, num_recurrence=None):
+        # Преобразуем padding mask в attention mask
         key_padding_mask = attention_mask if attention_mask is not None else None
         
         # Эмбеддинг
         x = self.embedding(x)
         
+        # Нормализация перед энкодером
+        x = self.pre_encoder_norm(x)
+        
         # Энкодер
         x = self.encoder(x, src_key_padding_mask=key_padding_mask)
+        
+        # Случайное количество итераций, если указано
+        if num_recurrence is None:
+            num_recurrence = self.mean_recurrence
             
-        # Рекуррентный блок (применяется несколько раз как в оригинале)
-        for _ in range(self.mean_recurrence):
+        # Начальное состояние с нормализацией
+        x = self.pre_recurrent_norm(x)
+            
+        # Рекуррентный блок (применяется указанное число раз)
+        for _ in range(num_recurrence):
             x = self.recurrent_block(x, src_key_padding_mask=key_padding_mask)
+        
+        # Нормализация после рекуррентного блока
+        x = self.post_recurrent_norm(x)
+        
+        # Нормализация перед декодером
+        x = self.pre_decoder_norm(x)
         
         # Декодер
         x = self.decoder(x, src_key_padding_mask=key_padding_mask)
+        
+        # Финальная нормализация
+        x = self.final_norm(x)
             
-        # Mean pooling для классификации с учетом padding mask
+        # Mean pooling с учетом padding mask
         if key_padding_mask is not None:
             # Инвертируем маску: True для токенов, которые нужно сохранить
             mask = ~key_padding_mask
@@ -150,7 +182,7 @@ def train_model(
     """Обучение модели на оптимизированных данных."""
     # Настройка устройства
     if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     print(f"Using device: {device}")
     
@@ -295,12 +327,12 @@ def train_model(
     # Функция потерь и оптимизатор
     criterion = nn.CrossEntropyLoss()
     
-    # Используем более стабильные гиперпараметры для оптимизатора
-    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01, eps=1e-8)
+    # Используем более стабильные гиперпараметры для оптимизатора: меньший LR и более сильный weight decay
+    optimizer = optim.AdamW(model.parameters(), lr=learning_rate * 0.1, weight_decay=0.1, eps=1e-8)
     
-    # Добавляем планировщик скорости обучения
+    # Добавляем планировщик скорости обучения с более щадящими параметрами 
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=2, verbose=True, min_lr=1e-6
+        optimizer, mode='min', factor=0.2, patience=3, verbose=True, min_lr=1e-7
     )
     
     # Настраиваем ранний останов
@@ -314,6 +346,7 @@ def train_model(
     train_accuracies = []
     val_accuracies = []
     lr_history = []
+    all_step_metrics = []  # Создаем список для хранения всех метрик по шагам
     
     # Создаем директорию для детализированных метрик
     metrics_dir = Path(output_dir) / "metrics"
@@ -339,7 +372,7 @@ def train_model(
     
     for epoch in range(epochs):
         # Обучение
-        model.train()
+        model.train()  # Важно: перед каждой эпохой устанавливаем режим обучения
         train_loss = 0.0
         batch_count = 0
         epoch_step_metrics = []
@@ -357,13 +390,28 @@ def train_model(
             # Создаем маску внимания (1 для паддинг-токенов)
             attention_mask = (input_ids == tokenizer.pad_id)
             
-            # Прямой проход
-            logits = model(input_ids, attention_mask)
+            # Используем случайное число итераций как в статье
+            # Логнормальное распределение со средним mean_recurrence
+            if model.training:
+                # Случайное количество итераций в пределах [1, 2*mean_recurrence]
+                num_recurrence = max(1, int(torch.normal(
+                    mean=torch.tensor([model_config.mean_recurrence]), 
+                    std=torch.tensor([model_config.mean_recurrence/2])
+                ).item()))
+                num_recurrence = min(num_recurrence, 2 * model_config.mean_recurrence)
+            else:
+                num_recurrence = model_config.mean_recurrence
+                
+            # Прямой проход с указанным числом рекуррентных итераций
+            logits = model(input_ids, attention_mask, num_recurrence=num_recurrence)
             loss = criterion(logits, target_ids)
             
             # Обратный проход и оптимизация
             optimizer.zero_grad()
             loss.backward()
+            
+            # Добавим градиентный клиппинг для стабильности
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             
             # Отслеживаем статистику без вычисления точности
@@ -383,11 +431,13 @@ def train_model(
                 
                 # Записываем только базовые метрики на этом шаге
                 step_idx = step + epoch * len(train_loader)
-                epoch_step_metrics.append({
+                step_data = {
                     "step": step_idx,
                     "loss": avg_loss,
                     "lr": current_lr
-                })
+                }
+                epoch_step_metrics.append(step_data)
+                all_step_metrics.append(step_data)  # Добавляем также в общий список
                 
                 # Сбрасываем счетчики для следующего интервала
                 running_loss.zero_()
@@ -403,7 +453,7 @@ def train_model(
         train_losses.append(avg_train_loss)
         
         # Валидация - считаем точность только раз в эпоху
-        model.eval()
+        model.eval()  # Важно: устанавливаем режим оценки перед валидацией
         val_loss = 0.0
         val_correct = 0
         val_total = 0
@@ -486,6 +536,27 @@ def train_model(
               f"Val Loss: {avg_val_loss:.4f}, Val Acc: {val_accuracy:.2f}%, "
               f"LR: {current_lr:.2e}")
         
+        # Диагностика
+        if epoch == 0 or epoch == epochs - 1 or epoch % 5 == 0:
+            # Выводим параметры модели для отладки
+            print("\nDiagnostic check:")
+            for name, param in model.named_parameters():
+                if 'weight' in name and len(param.shape) >= 2:
+                    print(f"  {name}: shape={param.shape}, mean={param.mean().item():.4f}, "
+                          f"std={param.std().item():.4f}, max={param.max().item():.4f}, "
+                          f"min={param.min().item():.4f}, "
+                          f"has_nan={torch.isnan(param).any().item()}")
+            
+            # Проверка градиентов
+            param_norm = 0
+            grad_norm = 0
+            for p in model.parameters():
+                param_norm += p.norm().item() ** 2
+                if p.grad is not None:
+                    grad_norm += p.grad.norm().item() ** 2
+            print(f"  Total parameter norm: {param_norm**0.5:.4f}")
+            print(f"  Total gradient norm: {grad_norm**0.5:.4f}")
+        
         # Сохраняем лучшую модель
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
@@ -529,7 +600,7 @@ def train_model(
         'train_accuracy': train_accuracies,
         'val_accuracy': val_accuracies,
         'learning_rate': lr_history,
-        'step_metrics': step_metrics
+        'step_metrics': all_step_metrics  # Используем собранные метрики
     }
     with open(output_dir / "training_history.json", "w") as f:
         json.dump(history, f)
