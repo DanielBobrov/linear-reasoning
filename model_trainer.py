@@ -269,12 +269,35 @@ def train_model(
     
     # Функция потерь и оптимизатор
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
+    
+    # Используем более стабильные гиперпараметры для оптимизатора
+    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01, eps=1e-8)
+    
+    # Добавляем планировщик скорости обучения
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=2, verbose=True, min_lr=1e-6
+    )
+    
+    # Настраиваем ранний останов
+    early_stop_patience = 5  # Количество эпох без улучшения для раннего останова
+    early_stop_counter = 0
     
     # Оптимизированный цикл обучения
     best_val_loss = float('inf')
     train_losses = []
     val_losses = []
+    train_accuracies = []
+    val_accuracies = []
+    lr_history = []
+    
+    # Создаем директорию для детализированных метрик
+    metrics_dir = Path(output_dir) / "metrics"
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    metrics_file = metrics_dir / "training_metrics.csv"
+    
+    # Записываем заголовок файла метрик
+    with open(metrics_file, 'w') as f:
+        f.write("epoch,step,train_loss,val_loss,learning_rate\n")
     
     # Настраиваем прогресс-бар для обновления реже
     update_interval = max(1, len(train_dataset) // (batch_size * 20))  # Примерно 20 обновлений за эпоху
@@ -285,16 +308,19 @@ def train_model(
                           ncols=100,
                           bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
     
+    # Используем RunningMean только для потери, но не для точности (экономим вычисления)
+    running_loss = torch.zeros(1, device=device)
+    loss_count = 0
+    
     for epoch in range(epochs):
         # Обучение
         model.train()
         train_loss = 0.0
-        train_correct = 0
-        train_total = 0
         batch_count = 0
+        epoch_step_metrics = []
         
         # Итерация по батчам без вложенного прогресс-бара
-        for input_ids, target_ids, _ in train_loader:
+        for step, (input_ids, target_ids, _) in enumerate(train_loader):
             # Проверка на пустые батчи
             if input_ids.size(0) == 0:
                 continue
@@ -315,35 +341,43 @@ def train_model(
             loss.backward()
             optimizer.step()
             
-            # Отслеживаем статистику (без вычисления точности на каждой итерации)
+            # Отслеживаем статистику без вычисления точности
             train_loss += loss.item()
+            running_loss += loss.item()
+            loss_count += 1
             batch_count += 1
-            
-            # Обновляем информацию о точности только на некоторых итерациях
-            if batch_count % 10 == 0:  # рассчитываем точность каждые 10 батчей
-                _, predicted = torch.max(logits, 1)
-                train_total += target_ids.size(0)
-                train_correct += (predicted == target_ids).sum().item()
             
             # Обновляем прогресс-бар реже для повышения производительности
             if batch_count % update_interval == 0:
-                accuracy = 100 * train_correct / train_total if train_total > 0 else 0
+                current_lr = optimizer.param_groups[0]['lr']
+                avg_loss = running_loss.item() / max(1, loss_count)
                 global_progress.set_description(
-                    f"Epoch {epoch+1}/{epochs} - Loss: {loss.item():.2f}, Accuracy: {accuracy:.2f}%"
+                    f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.2f}, LR: {current_lr:.2e}"
                 )
                 global_progress.update(update_interval)
+                
+                # Записываем только базовые метрики на этом шаге
+                step_idx = step + epoch * len(train_loader)
+                epoch_step_metrics.append({
+                    "step": step_idx,
+                    "loss": avg_loss,
+                    "lr": current_lr
+                })
+                
+                # Сбрасываем счетчики для следующего интервала
+                running_loss.zero_()
+                loss_count = 0
         
         # Обновляем оставшийся прогресс в конце эпохи
         remaining_steps = batch_count % update_interval
         if remaining_steps > 0:
             global_progress.update(remaining_steps)
         
-        # Вычисляем средние значения метрик за эпоху
+        # Вычисляем среднюю потерю за эпоху
         avg_train_loss = train_loss / batch_count if batch_count > 0 else float('inf')
-        train_accuracy = 100 * train_correct / train_total if train_total > 0 else 0
         train_losses.append(avg_train_loss)
         
-        # Валидация с меньшей частотой вычислений
+        # Валидация - считаем точность только раз в эпоху
         model.eval()
         val_loss = 0.0
         val_correct = 0
@@ -352,7 +386,7 @@ def train_model(
         
         with torch.no_grad():
             for input_ids, target_ids, _ in val_loader:
-                # Проверка на пустые батчи
+                # Пропускаем пустые батчи
                 if input_ids.size(0) == 0:
                     continue
                     
@@ -360,45 +394,94 @@ def train_model(
                 input_ids = input_ids.to(device)
                 target_ids = target_ids.to(device)
                 
-                # Создаем маску внимания (1 для паддинг-токенов)
+                # Создаем маску внимания
                 attention_mask = (input_ids == tokenizer.pad_id)
                 
                 # Прямой проход
                 logits = model(input_ids, attention_mask)
                 loss = criterion(logits, target_ids)
                 
-                # Отслеживаем статистику (без вычисления точности на каждой итерации)
+                # Отслеживаем потерю
                 val_loss += loss.item()
                 val_batch_count += 1
                 
-                # Вычисляем точность только для части батчей
-                if val_batch_count % 5 == 0:  # каждые 5 батчей
-                    _, predicted = torch.max(logits, 1)
-                    val_total += target_ids.size(0)
-                    val_correct += (predicted == target_ids).sum().item()
+                # Считаем точность только на валидации
+                _, predicted = torch.max(logits, 1)
+                val_total += target_ids.size(0)
+                val_correct += (predicted == target_ids).sum().item()
         
-        avg_val_loss = val_loss / len(val_loader) if len(val_loader) > 0 else float('inf')
+        # Вычисляем метрики валидации
+        avg_val_loss = val_loss / val_batch_count if val_batch_count > 0 else float('inf')
         val_accuracy = 100 * val_correct / val_total if val_total > 0 else 0
         val_losses.append(avg_val_loss)
+        val_accuracies.append(val_accuracy)
         
-        # Печатаем статистику эпохи на отдельной строке
+        # Вычисляем приблизительную точность на тренировочном наборе только в конце эпохи
+        if epoch % 1 == 0:  # Каждую эпоху или реже
+            model.eval()
+            train_correct = 0
+            train_total = 0
+            with torch.no_grad():
+                # Используем только небольшую выборку для оценки точности
+                sample_size = min(1000, len(train_dataset))
+                sample_indices = torch.randperm(len(train_dataset))[:sample_size]
+                for idx in sample_indices:
+                    item = train_dataset[idx]
+                    input_ids = torch.tensor([item['input_ids']], device=device)
+                    target_id = torch.tensor([item['target_id']], device=device)
+                    
+                    attention_mask = (input_ids == tokenizer.pad_id)
+                    logits = model(input_ids, attention_mask)
+                    _, predicted = torch.max(logits, 1)
+                    
+                    train_total += 1
+                    if predicted.item() == target_id.item():
+                        train_correct += 1
+            
+            train_accuracy = 100 * train_correct / train_total if train_total > 0 else 0
+            train_accuracies.append(train_accuracy)
+            model.train()  # Возвращаемся в режим обучения
+        else:
+            # Если не вычисляем точность в этой эпохе, используем предыдущее значение или 0
+            train_accuracy = train_accuracies[-1] if train_accuracies else 0
+            train_accuracies.append(train_accuracy)
+        
+        # Шаг планировщика скорости обучения
+        scheduler.step(avg_val_loss)
+        current_lr = optimizer.param_groups[0]['lr']
+        lr_history.append(current_lr)
+        
+        # Обновляем файл с метриками после эпохи
+        with open(metrics_file, 'a') as f:
+            f.write(f"{epoch},-1,{avg_train_loss:.6f},{avg_val_loss:.6f},{current_lr:.8e}\n")
+        
+        # Печатаем статистику эпохи
         print(f"\nEpoch {epoch+1}/{epochs} - "
               f"Train Loss: {avg_train_loss:.4f}, Train Acc: {train_accuracy:.2f}%, "
-              f"Val Loss: {avg_val_loss:.4f}, Val Acc: {val_accuracy:.2f}%")
+              f"Val Loss: {avg_val_loss:.4f}, Val Acc: {val_accuracy:.2f}%, "
+              f"LR: {current_lr:.2e}")
         
         # Сохраняем лучшую модель
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
+            early_stop_counter = 0
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
                 'train_loss': avg_train_loss,
                 'val_loss': avg_val_loss,
-                'train_accuracy': train_accuracy,
                 'val_accuracy': val_accuracy,
             }, output_dir / "best_model.pt")
             print(f"New best model saved with validation loss: {best_val_loss:.4f}")
+        else:
+            early_stop_counter += 1
+            print(f"Validation loss did not improve. Early stop counter: {early_stop_counter}/{early_stop_patience}")
+            
+            if early_stop_counter >= early_stop_patience:
+                print(f"Early stopping triggered after {epoch+1} epochs!")
+                break
     
     # Закрываем прогресс-бар в конце
     global_progress.close()
@@ -414,13 +497,55 @@ def train_model(
         'val_accuracy': val_accuracy,
     }, output_dir / "final_model.pt")
     
-    # Сохраняем историю обучения
+    # Сохраняем историю обучения с расширенными метриками
     history = {
         'train_loss': train_losses,
         'val_loss': val_losses,
+        'train_accuracy': train_accuracies,
+        'val_accuracy': val_accuracies,
+        'learning_rate': lr_history,
+        'step_metrics': step_metrics
     }
     with open(output_dir / "training_history.json", "w") as f:
         json.dump(history, f)
+        
+    # Создаем простой график для быстрого визуального анализа
+    try:
+        import matplotlib.pyplot as plt
+        
+        plt.figure(figsize=(12, 10))
+        
+        # График потерь
+        plt.subplot(2, 2, 1)
+        plt.plot(train_losses, label='Train Loss')
+        plt.plot(val_losses, label='Validation Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.title('Training and Validation Loss')
+        plt.legend()
+        
+        # График точности
+        plt.subplot(2, 2, 2)
+        plt.plot(train_accuracies, label='Train Accuracy')
+        plt.plot(val_accuracies, label='Validation Accuracy')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy (%)')
+        plt.title('Training and Validation Accuracy')
+        plt.legend()
+        
+        # График LR
+        plt.subplot(2, 2, 3)
+        plt.plot(lr_history)
+        plt.xlabel('Epoch')
+        plt.ylabel('Learning Rate')
+        plt.title('Learning Rate Schedule')
+        plt.yscale('log')
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / "training_metrics.png")
+        print(f"Training metrics plot saved to {output_dir / 'training_metrics.png'}")
+    except Exception as e:
+        print(f"Could not create metrics plot: {e}")
     
     print("Training completed!")
     return model
