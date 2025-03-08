@@ -444,7 +444,7 @@ def train_model(
             print(f"  Total parameter norm: {param_norm**0.5:.4f}")
             print(f"  Total gradient norm: {grad_norm**0.5:.4f}")
         
-                if avg_val_loss < best_val_loss:
+        if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             torch.save({
                 'epoch': epoch,
@@ -459,7 +459,7 @@ def train_model(
     
     global_progress.close()
     
-        torch.save({
+    torch.save({
         'epoch': epochs,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
