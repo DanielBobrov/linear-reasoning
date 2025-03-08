@@ -47,8 +47,8 @@ def optimized_collate_fn(
     # Заполняем тензоры без проверки каждого токена
     for i, item in enumerate(batch):
         seq_len = min(len(item["input_ids"]), max_length)
-            input_ids[i, :seq_len] = torch.tensor(item["input_ids"][:seq_len], dtype=torch.long)
-            target_ids[i] = item["target_id"]
-            metadata.append(item.get("type", "unknown"))
+        input_ids[i, :seq_len] = torch.tensor(item["input_ids"][:seq_len], dtype=torch.long)
+        target_ids[i] = item["target_id"]
+        metadata.append(item.get("type", "unknown"))
             
     return input_ids, target_ids, metadata

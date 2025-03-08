@@ -29,4 +29,3 @@ venv.bak/
 output/
 checkpoints/
 *.pt
-data/
