@@ -9,106 +9,193 @@ from pathlib import Path
 from tqdm import tqdm
 import numpy as np
 import random
+import math
 
 from simple_tokenizer import SimpleTokenizer
 from optimized_collator import optimized_collate_fn
 
 class SingleTokenClassifier(nn.Module):
-    """RecRNN model architecture."""
+    """RecRNN model architecture based on the recurrent depth paper."""
     def __init__(self, config):
         super().__init__()
         self.config = config
         self.vocab_size = config.vocab_size
         
-        if self.vocab_size < 1500:
-            self.vocab_size = max(self.vocab_size + 10, 1200)
-            
+        # Embedding layer and scaling
         self.embedding = nn.Embedding(self.vocab_size, config.hidden_size, padding_idx=0)
-        self.pre_encoder_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.embedding_scale = math.sqrt(config.hidden_size)
         
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=config.hidden_size, 
-            nhead=config.num_attention_heads,
-            dim_feedforward=config.intermediate_size,
-            dropout=config.hidden_dropout_prob,
-            activation=config.hidden_act,
-            batch_first=True,
-            norm_first=True
-        )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=config.encoder_layers)
+        # The "Prelude" (P) block - embeds input data into latent space
+        prelude_layers = []
+        for _ in range(config.encoder_layers):
+            prelude_layers.append(self._create_sandwich_layer(config))
+        self.prelude = nn.ModuleList(prelude_layers)
         
-        self.pre_recurrent_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.post_recurrent_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        # The "Core" (R) recurrent block
+        core_layers = []
+        for _ in range(config.recurrent_layers):
+            core_layers.append(self._create_sandwich_layer(config))
+        self.core_block = nn.ModuleList(core_layers)
         
-        rec_layer = nn.TransformerEncoderLayer(
-            d_model=config.hidden_size, 
-            nhead=config.num_attention_heads,
-            dim_feedforward=config.intermediate_size,
-            dropout=config.hidden_dropout_prob,
-            activation=config.hidden_act,
-            batch_first=True,
-            norm_first=True
-        )
-        self.recurrent_block = nn.TransformerEncoder(rec_layer, num_layers=config.recurrent_layers)
-        self.mean_recurrence = getattr(config, "mean_recurrence", 6)
+        # Adapter matrix to combine embedded input and previous state
+        self.adapter = nn.Linear(2 * config.hidden_size, config.hidden_size)
         
-        self.pre_decoder_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        # The "Coda" (C) block - un-embeds from latent space
+        coda_layers = []
+        for _ in range(config.decoder_layers):
+            coda_layers.append(self._create_sandwich_layer(config))
+        self.coda = nn.ModuleList(coda_layers)
         
-        decoder_layer = nn.TransformerEncoderLayer(
-            d_model=config.hidden_size, 
-            nhead=config.num_attention_heads,
-            dim_feedforward=config.intermediate_size,
-            dropout=config.hidden_dropout_prob,
-            activation=config.hidden_act,
-            batch_first=True,
-            norm_first=True
-        )
-        self.decoder = nn.TransformerEncoder(decoder_layer, num_layers=config.decoder_layers)
-        
+        # Final normalization and output projection
         self.final_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.classifier = nn.Linear(config.hidden_size, config.vocab_size)
         
+        # Recurrence settings
+        self.mean_recurrence = getattr(config, "mean_recurrence", 10)
+        self.state_init_std = math.sqrt(2/5)  # σ for random state initialization
+        
+        # Apply initialization
         self.apply(self._init_weights)
         
+    def _create_sandwich_layer(self, config):
+        """Creates a sandwich-format layer as described in the paper."""
+        layer = nn.ModuleDict({
+            'norm1': nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
+            'norm2': nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
+            'norm3': nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
+            'norm4': nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
+            'attention': nn.MultiheadAttention(
+                embed_dim=config.hidden_size,
+                num_heads=config.num_attention_heads,
+                dropout=config.hidden_dropout_prob,
+                batch_first=True
+            ),
+            'mlp': nn.Sequential(
+                nn.Linear(config.hidden_size, config.intermediate_size),
+                nn.SiLU(),
+                nn.Linear(config.intermediate_size, config.hidden_size),
+                nn.Dropout(config.hidden_dropout_prob)
+            )
+        })
+        return layer
+    
+    def _sandwich_forward(self, x, layer, attention_mask=None):
+        """Forward pass through a sandwich-format layer."""
+        # Attention part with sandwich norm
+        x_norm1 = layer['norm1'](x)
+        attn_output, _ = layer['attention'](
+            query=x_norm1, 
+            key=x_norm1, 
+            value=x_norm1, 
+            key_padding_mask=attention_mask,
+            attn_mask=self._get_causal_mask(x.size(1)) if attention_mask is None else None
+        )
+        x = x + layer['norm2'](attn_output)
+        
+        # MLP part with sandwich norm
+        x_norm3 = layer['norm3'](x)
+        mlp_output = layer['mlp'](x_norm3)
+        x = x + layer['norm4'](mlp_output)
+        
+        return x
+    
+    def _get_causal_mask(self, seq_len):
+        """Creates a causal mask for self-attention."""
+        mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
+        return mask.to(next(self.parameters()).device)
+        
     def _init_weights(self, module):
+        """Initialize weights according to the paper."""
         if isinstance(module, nn.Linear):
-            nn.init.xavier_uniform_(module.weight, gain=1.0 / (2.0 ** 0.5))
+            if module is self.classifier or "mlp" in str(module):
+                # For output and MLP out projections
+                std = 1/math.sqrt(5 * self.config.hidden_size * (self.config.encoder_layers + 
+                                self.mean_recurrence * self.config.recurrent_layers + 
+                                self.config.decoder_layers))
+                nn.init.normal_(module.weight, mean=0.0, std=std)
+            else:
+                # For other linear layers
+                std = math.sqrt(2/5) / math.sqrt(self.config.hidden_size)
+                nn.init.normal_(module.weight, mean=0.0, std=std)
+                
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
+                
         elif isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range / 2.0)
+            
         elif isinstance(module, nn.LayerNorm):
             nn.init.ones_(module.weight)
             nn.init.zeros_(module.bias)
         
     def forward(self, x, attention_mask=None, num_recurrence=None):
-        key_padding_mask = attention_mask if attention_mask is not None else None
+        batch_size, seq_len = x.shape
+        device = x.device
         
-        x = self.embedding(x)
-        x = self.pre_encoder_norm(x)
-        x = self.encoder(x, src_key_padding_mask=key_padding_mask)
-        
+        # Determine number of recurrence steps
         if num_recurrence is None:
             num_recurrence = self.mean_recurrence
-            
-        x = self.pre_recurrent_norm(x)
-            
-        for _ in range(num_recurrence):
-            x = self.recurrent_block(x, src_key_padding_mask=key_padding_mask)
         
-        x = self.post_recurrent_norm(x)
-        x = self.pre_decoder_norm(x)
-        x = self.decoder(x, src_key_padding_mask=key_padding_mask)
-        x = self.final_norm(x)
+        # Apply embedding and scaling
+        x = self.embedding(x) * self.embedding_scale
+        
+        # Get key_padding_mask for attention layers
+        key_padding_mask = attention_mask if attention_mask is not None else None
+        
+        # Prelude: Process input through prelude layers
+        e = x  # Store embedded input
+        for layer in self.prelude:
+            e = self._sandwich_forward(e, layer, key_padding_mask)
+        
+        # Initialize random state: s0 ~ N(0, σ²In·h)
+        s = torch.randn(batch_size, seq_len, self.config.hidden_size, 
+                      device=device) * self.state_init_std
+        
+        # Core: Apply recurrent block for num_recurrence iterations
+        for _ in range(num_recurrence):
+            # Combine state and embedded input using adapter
+            combined = torch.cat([s, e], dim=-1)
+            adapter_out = self.adapter(combined)
             
+            # Process through core layers
+            s = adapter_out
+            for layer in self.core_block:
+                s = self._sandwich_forward(s, layer, key_padding_mask)
+        
+        # Coda: Final processing
+        c = s
+        for layer in self.coda:
+            c = self._sandwich_forward(c, layer, key_padding_mask)
+        
+        c = self.final_norm(c)
+        
+        # Mean pooling over sequence dimension if needed
         if key_padding_mask is not None:
             mask = ~key_padding_mask
             mask = mask.float()
-            x = (x * mask.unsqueeze(-1)).sum(1) / mask.sum(1, keepdim=True)
+            c = (c * mask.unsqueeze(-1)).sum(1) / mask.sum(1, keepdim=True)
         else:
-            x = torch.mean(x, dim=1)
+            c = torch.mean(c, dim=1)
         
-        return self.classifier(x)
+        # Projection to vocabulary
+        return self.classifier(c)
+    
+    def sample_num_recurrence(self):
+        """Sample recurrence number from log-normal Poisson distribution as described in the paper."""
+        mean_recurrence = self.mean_recurrence
+        sigma = 0.5  # Fixed variance as in paper
+        
+        # Sample from log-normal Poisson distribution
+        tau = torch.normal(
+            mean=math.log(mean_recurrence) - 0.5 * sigma**2,
+            std=sigma
+        )
+        # Use Poisson with rate e^τ
+        rate = math.exp(tau)
+        r = torch.poisson(torch.tensor([rate])).item() + 1
+        
+        # Ensure minimum of 1 step and reasonable maximum
+        return max(1, min(int(r), 2 * mean_recurrence))
 
 class OptimizedDataset:
     def __init__(self, data_path):
@@ -222,7 +309,7 @@ def train_model(
         decoder_layers=1,
         num_attention_heads=8,
         block_size=256,
-        mean_recurrence=6,
+        mean_recurrence=10,
     )
     
     estimated_params = model_config.estimate_params() if hasattr(model_config, "estimate_params") else "N/A"
@@ -307,11 +394,8 @@ def train_model(
             attention_mask = (input_ids == tokenizer.pad_id)
             
             if model.training:
-                num_recurrence = max(1, int(torch.normal(
-                    mean=torch.tensor([float(model_config.mean_recurrence)]), 
-                    std=torch.tensor([float(model_config.mean_recurrence/2)])
-                ).item()))
-                num_recurrence = min(num_recurrence, 2 * model_config.mean_recurrence)
+                # Use the log-normal Poisson sampling for recurrence steps
+                num_recurrence = model.sample_num_recurrence()
             else:
                 num_recurrence = model_config.mean_recurrence
                 
@@ -321,6 +405,7 @@ def train_model(
             optimizer.zero_grad()
             loss.backward()
             
+            # Gradient clipping
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             
