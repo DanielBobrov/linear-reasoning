@@ -186,12 +186,12 @@ class SingleTokenClassifier(nn.Module):
         sigma = 0.5  # Fixed variance as in paper
         
         # Sample from log-normal Poisson distribution
-        tau = torch.normal(
-            mean=math.log(mean_recurrence) - 0.5 * sigma**2,
-            std=sigma
-        )
+        # Исправленный вызов torch.normal - корректная сигнатура для скалярных аргументов
+        mean_val = math.log(mean_recurrence) - 0.5 * sigma**2
+        tau = torch.normal(mean_val, sigma, (1,))
+        
         # Use Poisson with rate e^τ
-        rate = math.exp(tau)
+        rate = math.exp(tau.item())
         r = torch.poisson(torch.tensor([rate])).item() + 1
         
         # Ensure minimum of 1 step and reasonable maximum
@@ -259,7 +259,7 @@ def train_model(
     output_dir.mkdir(parents=True, exist_ok=True)
     
     vocab_paths = [
-        "/kaggle/input/paper-data/data/comparison.1000.12.6/vocab.json",
+        "/kaggle/input/paper-data/data/data/comparison.1000.12.6/vocab.json",
         "/kaggle/working/data/vocab.json"
     ]
     
