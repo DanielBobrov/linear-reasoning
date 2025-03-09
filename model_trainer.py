@@ -51,7 +51,7 @@ class SingleTokenClassifier(nn.Module):
         self.classifier = nn.Linear(config.hidden_size, config.vocab_size)
         
         # Recurrence settings
-        self.mean_recurrence = getattr(config, "mean_recurrence", 10)
+        self.mean_recurrence = getattr(config, "mean_recurrence", 4)
         self.state_init_std = math.sqrt(2/5)  # σ for random state initialization
         
         # Apply initialization
@@ -309,7 +309,7 @@ def train_model(
         decoder_layers=1,
         num_attention_heads=8,
         block_size=256,
-        mean_recurrence=10,
+        mean_recurrence=4,
     )
     
     estimated_params = model_config.estimate_params() if hasattr(model_config, "estimate_params") else "N/A"

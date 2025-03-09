@@ -91,7 +91,7 @@ def run_small_model():
     args = parser.parse_args()
 
     # Определяем пути к данным и выходным файлам с учетом структуры Kaggle
-    data_dir = Path("/kaggle/input/paper-data/data/comparison.1000.12.6")
+    data_dir = Path("/kaggle/input/paper-data/data/data/comparison.1000.12.6")
     working_dir = Path("/kaggle/working")
     output_dir = working_dir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
