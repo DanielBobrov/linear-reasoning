@@ -21,7 +21,8 @@ def prepare_optimized_data():
 
     # Пути в Kaggle - проверяем различные возможные пути к данным
     possible_data_dirs = [
-        Path("/kaggle/input/paper-data/data/comparison.1000.12.6"),
+        # Path("/kaggle/input/paper-data/data/comparison.1000.12.6"),
+        Path("/kaggle/input/paper-data/data/data/composition.2000.200.18.0"),
         Path("/kaggle/working/data")
     ]
     

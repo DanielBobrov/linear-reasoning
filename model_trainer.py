@@ -259,7 +259,8 @@ def train_model(
     output_dir.mkdir(parents=True, exist_ok=True)
     
     vocab_paths = [
-        "/kaggle/input/paper-data/data/data/comparison.1000.12.6/vocab.json",
+        # "/kaggle/input/paper-data/data/data/comparison.1000.12.6/vocab.json",
+        "/kaggle/input/paper-data/data/data/composition.2000.200.18.0/vocab.json",
         "/kaggle/working/data/vocab.json"
     ]
     
